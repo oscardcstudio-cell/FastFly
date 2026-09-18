@@ -10,6 +10,7 @@ Usage (standalone test):
 """
 
 import base64
+import queue
 import os
 import time
 import sys
@@ -72,6 +73,8 @@ class SimEngine:
         self.adapt_inc   = np.float32(0.3)
         self.adapt_decay = np.float32(0.995)
         self.d_adapt     = cp.zeros(self.n_neurons, dtype=cp.float32)
+        self._tap_queue  = queue.SimpleQueue()
+        self._taps       = []
         self.noise_amp   = np.float32(0.4)
 
         # Launch config
@@ -243,6 +246,13 @@ class SimEngine:
         self._stimulus_indices = cp.asarray(np.array(neuron_indices, dtype=np.int64))
         self._stimulus_amplitude = float(amplitude)
 
+    def tap(self, name, amplitude=0.5, steps=150):
+        """A brief push on a predefined sense; several can overlap. Thread-safe (queue)."""
+        if name not in self._stimuli:
+            return False
+        self._tap_queue.put((name, float(amplitude), int(steps)))
+        return True
+
     def clear_stimulus(self):
         self._stimulus_indices = None
         self._stimulus_amplitude = 0.0
@@ -311,8 +321,19 @@ class SimEngine:
         d_accum_bits.fill(0)
         hist = cp.empty((n, self.spike_words), dtype=cp.uint32) if self.frame_every else None
 
+        while not self._tap_queue.empty():
+            name, amp, steps = self._tap_queue.get()  # GPU upload here, on the sim thread
+            self._taps.append([cp.asarray(self._stimuli[name].astype(np.int64)), amp, steps])
+        taps = self._taps
+
         for sub in range(n):
             d_num_spikes.fill(0)
+
+            for t in taps:
+                d_current[t[0]] += t[1]
+                t[2] -= 1
+            if any(t[2] <= 0 for t in taps):
+                taps = self._taps = [t for t in taps if t[2] > 0]
 
             if stim_indices is not None:
                 d_current[stim_indices] += stim_amp

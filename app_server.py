@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser(description="FlyWire Simulator Web Server")
 parser.add_argument("--data", help="Binary connectome file")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, default=8000)
+parser.add_argument("--beatgrid", help="Path to the vj-rien repo: its sequencer feeds the fly senses")
 args = parser.parse_args()
 
 print("\nInitializing simulation engine...")
@@ -37,6 +38,17 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 sim_running = False
 batch_size = 200
 clients: list[WebSocket] = []
+
+
+@app.on_event("startup")
+async def start_beatgrid_bridge():
+    if args.beatgrid:
+        from beatgrid_bridge import follow
+
+        def on_tap(name, amplitude, steps):
+            print(f"beatgrid -> {name}", flush=True)
+            engine.tap(name, amplitude, steps)
+        asyncio.create_task(follow(args.beatgrid, on_tap))
 
 
 @app.get("/")
@@ -160,6 +172,9 @@ async def websocket_endpoint(ws: WebSocket):
 
             elif cmd == "reset":
                 engine.reset_state()
+
+            elif cmd == "tap":
+                engine.tap(msg.get("name", ""), float(msg.get("amplitude", 0.5)), int(msg.get("steps", 150)))
 
             elif cmd == "clear_stimulus":
                 engine.clear_stimulus()
