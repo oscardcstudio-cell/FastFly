@@ -1,6 +1,6 @@
 """Check that each predefined sense lights its own path (noise off, audio off).
 
-Needs the server running:  python check_senses.py [port] [amplitude]
+Needs the server running:  python check_senses.py [port] [amplitude] [adapt]
 Prints, per sense, how many neurons fired beyond the stimulated ones, then the
 overlap (Jaccard) between senses. Fails if a sense is silent or two unrelated senses match.
 """
@@ -10,9 +10,9 @@ import websockets
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "8010"
 AMP = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+ADAPT = float(sys.argv[3]) if len(sys.argv) > 3 else 0.3
 BATCHES = 3
-# Smell, heat and humidity all enter through the antennal lobe and ignite the same loop
-# (antennal lobe + mushroom body, ~10k neurons, never dies out): known limit of the model, not a bug of the check.
+# Smell, heat and humidity all enter through the antennal lobe and share most of their path.
 FAMILY = {"Odor": "antennal", "Temperature": "antennal", "Humidity": "antennal"}
 
 
@@ -25,7 +25,7 @@ async def main():
         for name in [n for n in init["stimuli"] if not n.startswith("Motor")]:
             # re-sent before every sense: any browser tab that reconnects rewrites the shared engine's params
             await send({"cmd": "pause"})
-            for k, v in (("noise_amp", 0), ("weight_gain", 0.8), ("frame_every", 5), ("send_active_indices", 0), ("audio_mute", 1)):
+            for k, v in (("noise_amp", 0), ("weight_gain", 0.8), ("frame_every", 5), ("send_active_indices", 0), ("audio_mute", 1), ("adapt", ADAPT)):
                 await send({"cmd": "set_param", "key": k, "value": v})
             await send({"cmd": "clear_stimulus"})
             await send({"cmd": "reset"})

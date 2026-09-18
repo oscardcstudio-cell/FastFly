@@ -66,6 +66,12 @@ class SimEngine:
         self.tau_decay   = np.float32(0.9)
         self.v_threshold = np.float32(1.0)
         self.v_reset     = np.float32(0.0)
+        # threshold fatigue per spike / its relaxation per step (tau ~200 steps); inc 0 = plain LIF
+        # 0.3 measured with check_senses.py: at 0.05 a tap still latches the antennal-lobe loop, at 0.15 strong
+        # senses flash through it (overlap 0.57), at 0.3 paths stay apart (0.08). Not monotonic: re-run the check.
+        self.adapt_inc   = np.float32(0.3)
+        self.adapt_decay = np.float32(0.995)
+        self.d_adapt     = cp.zeros(self.n_neurons, dtype=cp.float32)
         self.noise_amp   = np.float32(0.4)
 
         # Launch config
@@ -248,6 +254,10 @@ class SimEngine:
     def reset_state(self):
         self.d_voltage.fill(0)
         self.d_current.fill(0)
+        self.d_adapt.fill(0)
+
+    def set_adapt(self, value):
+        self.adapt_inc = np.float32(max(0.0, value))
 
     def set_noise_amp(self, value):
         self.noise_amp = np.float32(value)
@@ -315,7 +325,7 @@ class SimEngine:
                  n_neurons_i32, spike_words_i32,
                  self.tau_decay, self.v_threshold, self.v_reset,
                  np.uint32(self.seed), np.uint32(self.current_step),
-                 self.noise_amp))
+                 self.noise_amp, self.d_adapt, self.adapt_inc, self.adapt_decay))
             cp.bitwise_or(d_accum_bits, d_spike_bits, out=d_accum_bits)
             if hist is not None:
                 hist[sub] = d_spike_bits

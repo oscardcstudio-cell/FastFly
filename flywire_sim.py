@@ -43,7 +43,10 @@ __global__ void kernel_update_with_noise(
     const float                v_reset,
     const unsigned int         seed,
     const unsigned int         step,
-    const float                noise_amplitude
+    const float                noise_amplitude,
+    float*        __restrict__ adapt,
+    const float                adapt_inc,
+    const float                adapt_decay
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -59,7 +62,11 @@ __global__ void kernel_update_with_noise(
         // LIF update with noise (current stays in register)
         float c = current[i] + noise;
         float v = voltage[i] * tau_decay + c;
-        spiked = (v >= v_threshold);
+        // Spike-frequency adaptation: each spike raises this neuron's threshold, which then relaxes.
+        // Without it the recurrent loops latch forever. adapt_inc = 0 is the plain LIF.
+        float a = adapt[i] * adapt_decay;
+        spiked = (v >= v_threshold + a);
+        adapt[i] = spiked ? a + adapt_inc : a;
         voltage[i] = spiked ? v_reset : v;
         current[i] = 0.0f;
     }
@@ -411,6 +418,7 @@ def run_simulation(n_neurons, n_synapses, offsets, targets, weights,
 
     ev = [cp.cuda.Event() for _ in range(4)]  # start, update, compact, prop
 
+    d_adapt = cp.zeros(n_neurons, dtype=cp.float32)
     for step in range(total_steps):
         is_bench = step >= warmup_steps
         d_num_spikes.fill(0)
@@ -421,7 +429,8 @@ def run_simulation(n_neurons, n_synapses, offsets, targets, weights,
             (d_voltage, d_current, d_spike_bits,
              np.int32(n_neurons), np.int32(spike_words),
              tau_decay, v_threshold, v_reset,
-             np.uint32(seed), np.uint32(step), noise_amp))
+             np.uint32(seed), np.uint32(step), noise_amp,
+             d_adapt, np.float32(0), np.float32(1)))  # benchmark: plain LIF
         ev[1].record()
 
         # Phase 2: Compact spikes
