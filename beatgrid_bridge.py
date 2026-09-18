@@ -20,7 +20,7 @@ SECTIONS = {
     "drop": ("Sugar (proboscis)", 0.8, 200),       # the reward
     "break": ("Odor (both antennae)", 0.4, 200),   # something in the air
 }
-MIN_SATURATION, MIN_BRIGHT = 0.15, 0.6
+MIN_SATURATION, MIN_BRIGHT = 0.15, 0.31  # 0.31 = brightest quarter of Oscar's loops (max measured 0.57)
 
 
 def senses_for(tags, slot=0):
@@ -84,7 +84,7 @@ async def follow(beatgrid_root, on_tap, poll=0.03):
 
 if __name__ == "__main__":
     red = {"teinte": 11, "saturation": 0.4, "clarte": 0.3}
-    blue = {"teinte": 210, "saturation": 0.5, "clarte": 0.8}
+    blue = {"teinte": 210, "saturation": 0.5, "clarte": 0.5}
     grey = {"teinte": 11, "saturation": 0.05, "clarte": 0.2}
     assert senses_for(red) == [WARM]
     assert senses_for(blue, slot=1) == [COLD, BRIGHT[1]]
