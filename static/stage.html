@@ -26,6 +26,7 @@
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div id="meters"></div>
   <div id="info">Connexion...</div>
+  <div id="bgstate"></div>
   <div id="bgsec" style="color:#fff;font-weight:600"></div>
   <div id="bg"></div>
   <div style="opacity:.6">H : masquer ce panneau</div>
@@ -141,6 +142,10 @@ function connect() {
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
     if (m.type === 'audio_levels') for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; }
+    if (m.type === 'beatgrid_state') {
+      const st = m.state, el = document.getElementById('bgstate');
+      el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;
+    }
     if (m.type === 'beatgrid') {
       const FR = { 'Temperature change': 'chaleur', 'Humidity change': 'humidité', 'Light (left eye)': 'œil gauche', 'Light (right eye)': 'œil droit', 'Sugar (proboscis)': 'sucre', 'Odor (both antennae)': 'odeur', 'Touch (left leg/body)': 'toucher gauche', 'Touch (right leg/body)': 'toucher droit', 'Tickle (left antenna)': 'vent antenne gauche', 'Tickle (right antenna)': 'vent antenne droite' };
       const LBL = { pattern: 'loop', drop: 'DROP', break: 'BREAK', suspension: 'SUSPENSION' };

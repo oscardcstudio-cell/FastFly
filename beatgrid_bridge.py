@@ -11,7 +11,7 @@ The sequencer brings what sound cannot say: which loops play, and where the trac
     python app_server.py ... --beatgrid ../vj-rien --replay ../vj-rien/sessions/<set>.jsonl   # a past set, no music needed
     python beatgrid_bridge.py        # self-check of the mapping, no GPU needed
 """
-import asyncio, glob, json, os
+import asyncio, glob, json, os, time, urllib.request
 
 # ---- The mapping. Artistic, not physiology: edit freely. (sense, amplitude, steps) ----
 WARM = ("Temperature change", 0.5, 150)   # warm-coloured loop -> heat sensors
@@ -65,12 +65,14 @@ def load_tags(path):
 async def follow(beatgrid_root, on_tap, poll=0.03):
     """Tail the newest session journal forever; history is skipped, only what happens now counts."""
     tags_path = os.path.join(beatgrid_root, "scripts", "beatgrid", "tags.json")
-    tags, tags_mtime, path, fh, last_columns = {}, 0, None, None, None
+    tags, tags_mtime, path, fh, last_columns, newest, next_scan = {}, 0, None, None, None, None, 0
     while True:
         try:
             if os.path.getmtime(tags_path) != tags_mtime:
                 tags_mtime, tags = os.path.getmtime(tags_path), load_tags(tags_path)
-            newest = max(glob.glob(os.path.join(beatgrid_root, "sessions", "*.jsonl")), key=os.path.getmtime, default=None)
+            if time.monotonic() >= next_scan:  # thousands of journals pile up there: never stat them all at every poll
+                next_scan = time.monotonic() + 2
+                newest = max(glob.glob(os.path.join(beatgrid_root, "sessions", "*.jsonl")), key=os.path.getmtime, default=None)
             if newest != path:  # beatgrid restarted: new journal
                 if fh: fh.close()
                 path, fh = newest, open(newest, encoding="utf-8") if newest else None
@@ -88,6 +90,27 @@ async def follow(beatgrid_root, on_tap, poll=0.03):
                     on_tap(*tap, event=event.get("kind"))
         except (OSError, ValueError) as exc:
             print(f"beatgrid bridge: {exc}", flush=True)
+        await asyncio.sleep(poll)
+
+
+async def watch_state(url, on_state, on_tap, poll=0.1):
+    """What the dashboard READS in the music (its break/drop advice, BPM), from beatgrid's /etat.
+    The journal only has the sections actually fired; the reading exists all the time, like on Oscar's screen."""
+    fetch = lambda: json.load(urllib.request.urlopen(url, timeout=1))
+    last = None
+    while True:
+        try:
+            state = await asyncio.get_running_loop().run_in_executor(None, fetch)
+        except (OSError, ValueError):
+            state = {}
+        if state.get("t", 0) < time.time() - 3:
+            state = {}  # beatgrid only beats while its dashboard is open: a stale state is no state
+        on_state(state)
+        advice = state.get("advice")
+        if advice != last and advice in SECTIONS and last is not None:
+            for tap in SECTIONS[advice]:
+                on_tap(*tap, event=advice)
+        last = advice if state else last
         await asyncio.sleep(poll)
 
 

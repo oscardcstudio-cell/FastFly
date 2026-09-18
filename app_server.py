@@ -24,6 +24,7 @@ parser.add_argument("--data", help="Binary connectome file")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, default=8000)
 parser.add_argument("--audio", action="store_true", help="The fly hears what the computer plays (WASAPI loopback), no browser needed")
+parser.add_argument("--beatgrid-url", default="http://127.0.0.1:8765", help="Where the beatgrid dashboard listens")
 parser.add_argument("--replay", help="With --beatgrid: play this past session journal (.jsonl) instead of the live one")
 parser.add_argument("--beatgrid", help="Path to the vj-rien repo: its sequencer feeds the fly senses")
 args = parser.parse_args()
@@ -67,13 +68,22 @@ async def start_audio_in():
 @app.on_event("startup")
 async def start_beatgrid_bridge():
     if args.beatgrid:
-        from beatgrid_bridge import follow, replay
+        from beatgrid_bridge import follow, replay, watch_state
+        import time
+        last_section = {}
 
         def on_tap(name, amplitude, steps, event=None):
+            if event != "pattern":  # a section comes both from the dashboard's reading and from its journal: once is enough
+                if time.monotonic() - last_section.get(name, 0) < 2:
+                    return
+                last_section[name] = time.monotonic()
             print(f"beatgrid {event} -> {name}", flush=True)
             engine.tap(name, amplitude, steps)
             # the pages show it, so Oscar can check what the fly was told against what he hears
             asyncio.create_task(broadcast({"type": "beatgrid", "event": event, "sense": name}))
+        if not args.replay:
+            asyncio.create_task(watch_state(args.beatgrid_url + "/etat",
+                                            lambda st: asyncio.create_task(broadcast({"type": "beatgrid_state", "state": st})), on_tap))
         asyncio.create_task(replay(args.replay, args.beatgrid, on_tap) if args.replay
                             else follow(args.beatgrid, on_tap))
 
