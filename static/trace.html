@@ -15,6 +15,8 @@
   .meter { flex: 1; height: 6px; background: #112; }
   .meter i { display: block; height: 100%; width: 0; background: #3cf; }
   .lbl { width: 42px; }
+  #senses { display: flex; flex-wrap: wrap; gap: 4px; max-width: 300px; }
+  #senses button.on { background: #3cf; color: #012; }
 </style>
 </head>
 <body>
@@ -25,6 +27,8 @@
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div class="row"><span class="lbl">Vitesse</span><input type="range" id="speed" min="0.1" max="8" step="0.1" value="1"></div>
   <div class="row"><span class="lbl">Traînée</span><input type="range" id="trail" min="0.8" max="0.995" step="0.005" value="0.96"></div>
+  <div class="row"><span class="lbl">Force</span><input type="range" id="amp" min="0.05" max="2" step="0.05" value="0.5"></div>
+  <div id="senses"></div>
   <div id="meters"></div>
   <div id="info">Connexion...</div>
   <div style="opacity:.6">H : masquer ce panneau</div>
@@ -176,10 +180,49 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
-    if (m.type === 'metrics' && m.frames) { queue.push(...m.frames); pending = false; }
+    if (m.type === 'init') buildSenses(m.stimuli || []);
+    if (m.type === 'metrics' && m.frames) { queue.push(...m.frames); pending = false; tap(); }
   };
 }
 connect();
+
+// ---- Senses: one predefined stimulus at a time, noise and audio off, so each path reads alone ----
+const FR = { Sugar: 'Sucre', Touch: 'Toucher', Tickle: 'Antenne', Odor: 'Odeur', Temperature: 'Température', Humidity: 'Humidité', Light: 'Lumière',
+  left: 'G', right: 'D' };
+const label = n => (FR[n.split(' ')[0]] || n) + (/(left|right)/.test(n) ? ' ' + FR[RegExp.$1] : '');
+let sense = null, senseBatch = 0;
+// A held stimulus ends in the same self-sustained loop whatever the sense (measured: ~600 steps).
+// So a sense is a tap: 1 batch with the stimulus, 2 batches to watch it travel, wipe, tap again.
+function tap() {
+  if (!sense) return;
+  const send = o => ws.send(JSON.stringify(o));
+  senseBatch++;
+  if (senseBatch === 1) send({ cmd: 'clear_stimulus' });
+  if (senseBatch === 3) { senseBatch = 0; send({ cmd: 'reset' }); send({ cmd: 'stimulus_preset', name: sense, amplitude: +document.getElementById('amp').value }); }
+}
+function setSense(name) {
+  const send = o => ws.send(JSON.stringify(o));
+  sense = sense === name ? null : name;
+  senseBatch = pending ? -1 : 0; // a batch already in flight predates the tap
+  document.querySelectorAll('#senses button').forEach(b => b.classList.toggle('on', b.dataset.name === sense));
+  send({ cmd: 'clear_stimulus' });
+  send({ cmd: 'set_param', key: 'noise_amp', value: sense ? 0 : 0.15 });
+  send({ cmd: 'set_param', key: 'audio_mute', value: sense ? 1 : 0 });
+  if (!sense) return;
+  send({ cmd: 'reset' });
+  send({ cmd: 'stimulus_preset', name: sense, amplitude: +document.getElementById('amp').value });
+  queue.length = 0; segI.fill(0); intensity.fill(0); live = []; // wipe old trails: the path starts from black
+}
+function buildSenses(names) {
+  const box = document.getElementById('senses');
+  box.innerHTML = '';
+  names.filter(n => !n.startsWith('Motor')).forEach(n => {
+    const b = document.createElement('button');
+    b.textContent = label(n); b.title = n; b.dataset.name = n; b.onclick = () => setSense(n);
+    box.appendChild(b);
+  });
+}
+document.getElementById('amp').onchange = () => { if (sense) { const n = sense; sense = null; setSense(n); } };
 
 // ---- Audio ----
 const meters = document.getElementById('meters');
@@ -236,7 +279,7 @@ document.getElementById('sys').onclick = async () => {
 };
 
 setInterval(() => {
-  if (!analyser || !ws || ws.readyState !== 1) return;
+  if (!analyser || !ws || ws.readyState !== 1 || sense) return;
   analyser.getFloatFrequencyData(bins);
   const hz = actx.sampleRate / analyser.fftSize;
   const gain = +document.getElementById('gain').value;

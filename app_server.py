@@ -171,6 +171,8 @@ async def websocket_endpoint(ws: WebSocket):
                     engine.set_noise_amp(float(value))
                 elif key == "frame_every":
                     engine.frame_every = max(0, int(value))
+                elif key == "audio_mute":
+                    engine.audio_mute = bool(value)
                 elif key == "weight_gain":
                     engine.set_weight_gain(float(value))
                 elif key == "batch_size":

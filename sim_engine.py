@@ -295,7 +295,8 @@ class SimEngine:
         spike_words_i32 = np.int32(self.spike_words)
         stim_indices = self._stimulus_indices
         stim_amp = self._stimulus_amplitude
-        audio = [(idx, amp) for idx, amp in self._audio.values() if amp > 0]
+        # audio_mute: any open /stage tab keeps feeding the shared ear; a sense test must silence it
+        audio = [] if getattr(self, 'audio_mute', False) else [(idx, amp) for idx, amp in self._audio.values() if amp > 0]
         d_accum_bits = self.d_accum_bits
         d_accum_bits.fill(0)
         hist = cp.empty((n, self.spike_words), dtype=cp.uint32) if self.frame_every else None
@@ -422,7 +423,8 @@ class SimEngine:
                     src = cp.repeat(pre, cnt)[hit]
                     sign = cp.sign(self.d_weights[syn[hit]].astype(cp.int32))
                     edges = cp.stack([src.astype(cp.int64), tgt[hit], sign.astype(cp.int64)], axis=1).get().ravel().tolist()
-            frames.append({"s": now.get().tolist()[:3000], "e": edges})
+            # even stride, not [:3000]: a head cut shows the same low-index neurons whatever fired
+            frames.append({"s": now[::-(-len(now) // 3000) or 1].get().tolist(), "e": edges})
         return frames
 
     # --- Data accessors ---
