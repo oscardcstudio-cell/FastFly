@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser(description="FlyWire Simulator Web Server")
 parser.add_argument("--data", help="Binary connectome file")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, default=8000)
+parser.add_argument("--replay", help="With --beatgrid: play this past session journal (.jsonl) instead of the live one")
 parser.add_argument("--beatgrid", help="Path to the vj-rien repo: its sequencer feeds the fly senses")
 args = parser.parse_args()
 
@@ -43,12 +44,15 @@ clients: list[WebSocket] = []
 @app.on_event("startup")
 async def start_beatgrid_bridge():
     if args.beatgrid:
-        from beatgrid_bridge import follow
+        from beatgrid_bridge import follow, replay
 
-        def on_tap(name, amplitude, steps):
-            print(f"beatgrid -> {name}", flush=True)
+        def on_tap(name, amplitude, steps, event=None):
+            print(f"beatgrid {event} -> {name}", flush=True)
             engine.tap(name, amplitude, steps)
-        asyncio.create_task(follow(args.beatgrid, on_tap))
+            # the pages show it, so Oscar can check what the fly was told against what he hears
+            asyncio.create_task(broadcast({"type": "beatgrid", "event": event, "sense": name}))
+        asyncio.create_task(replay(args.replay, args.beatgrid, on_tap) if args.replay
+                            else follow(args.beatgrid, on_tap))
 
 
 @app.get("/")

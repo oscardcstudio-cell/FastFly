@@ -8,6 +8,7 @@ The kick is not here: the fly already hears the music through its ear (/stage au
 The sequencer brings what sound cannot say: which loops play, and where the track is.
 
     python app_server.py --data flywire_v783.bin --port 8010 --beatgrid ../vj-rien
+    python app_server.py ... --beatgrid ../vj-rien --replay ../vj-rien/sessions/<set>.jsonl   # a past set, no music needed
     python beatgrid_bridge.py        # self-check of the mapping, no GPU needed
 """
 import asyncio, glob, json, os
@@ -76,10 +77,30 @@ async def follow(beatgrid_root, on_tap, poll=0.03):
                     if event.get("colonnes") == last_columns: continue
                     last_columns = event.get("colonnes")
                 for tap in taps_for(event, tags):
-                    on_tap(*tap)
+                    on_tap(*tap, event=event.get("kind"))
         except (OSError, ValueError) as exc:
             print(f"beatgrid bridge: {exc}", flush=True)
         await asyncio.sleep(poll)
+
+
+async def replay(journal, beatgrid_root, on_tap, speed=1.0):
+    """Play a past session journal again with its own timing, to watch the fly without a live set."""
+    tags = load_tags(os.path.join(beatgrid_root, "scripts", "beatgrid", "tags.json"))
+    while True:
+        prev, last_columns = None, None
+        with open(journal, encoding="utf-8") as fh:
+            for line in fh:
+                event = json.loads(line)
+                if event.get("kind") == "pattern":
+                    if event.get("colonnes") == last_columns: continue
+                    last_columns = event.get("colonnes")
+                taps = taps_for(event, tags)
+                if not taps: continue
+                t = event.get("t", 0)  # gaps clamped: the journal mixes two clocks and has long silences
+                await asyncio.sleep(min(3.0, max(0.0, (t - prev) / speed)) if prev is not None else 0)
+                prev = t
+                for tap in taps:
+                    on_tap(*tap, event=event.get("kind"))
 
 
 if __name__ == "__main__":

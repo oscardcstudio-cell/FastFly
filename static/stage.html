@@ -25,6 +25,8 @@
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div id="meters"></div>
   <div id="info">Connexion...</div>
+  <div id="bgsec" style="color:#fff;font-weight:600"></div>
+  <div id="bg"></div>
   <div style="opacity:.6">H : masquer ce panneau</div>
 </div>
 <script>
@@ -113,6 +115,7 @@ function drawGlow() {
 // ---- Sim link ----
 const info = document.getElementById('info');
 let ws;
+const bgLog = [];
 function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   const send = o => ws.send(JSON.stringify(o));
@@ -128,6 +131,14 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
+    if (m.type === 'beatgrid') {
+      const FR = { 'Temperature change': 'chaleur', 'Humidity change': 'humidité', 'Light (left eye)': 'œil gauche', 'Light (right eye)': 'œil droit', 'Sugar (proboscis)': 'sucre', 'Odor (both antennae)': 'odeur' };
+      const LBL = { pattern: 'loop', drop: 'DROP', break: 'BREAK' };
+      // drops and breaks get their own line: loop changes are frequent and would push them out of the log
+      if (m.event !== 'pattern') document.getElementById('bgsec').textContent = `${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense} · ${new Date().toLocaleTimeString()}`;
+      bgLog.unshift(`${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense}`); bgLog.length = Math.min(bgLog.length, 5);
+      document.getElementById('bg').innerHTML = bgLog.map((l, i) => `<div style="opacity:${1 - i * 0.18}">${l}</div>`).join('');
+    }
   };
 }
 connect();
