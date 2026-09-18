@@ -105,6 +105,22 @@ async def trace():
     return FileResponse(os.path.join(static_dir, "trace.html"))
 
 
+@app.get("/params")
+async def params_page():
+    return FileResponse(os.path.join(static_dir, "params.html"))
+
+
+weight_gain = 0.8  # the engine only keeps the scaled weights, not the factor
+engine.set_weight_gain(weight_gain)  # calm at rest from the start, before any page sets it
+
+
+@app.get("/api/params")
+async def get_params():
+    """Current knobs, so the settings window opens on the real values."""
+    return JSONResponse({"audio_gain": audio_gain, "weight_gain": weight_gain,
+                         "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp)})
+
+
 @app.get("/api/positions")
 async def get_positions():
     """Return neuron 3D positions + class info for the brain visualizer."""
@@ -155,7 +171,7 @@ async def sim_loop():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    global sim_running, batch_size, audio_gain
+    global sim_running, batch_size, audio_gain, weight_gain
 
     await ws.accept()
     clients.append(ws)
@@ -234,7 +250,8 @@ async def websocket_endpoint(ws: WebSocket):
                 elif key == "audio_mute":
                     engine.audio_mute = bool(value)
                 elif key == "weight_gain":
-                    engine.set_weight_gain(float(value))
+                    weight_gain = float(value)
+                    engine.set_weight_gain(weight_gain)
                 elif key == "batch_size":
                     batch_size = max(1, min(500, int(value)))
                 elif key == "send_active_indices":

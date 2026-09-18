@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Mouche · réglages</title>
+<style>
+  /* same look as the /stage and /trace panels */
+  html, body { margin: 0; background: #000; font: 12px system-ui, sans-serif; color: #9ab; }
+  #panel { padding: 14px; display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 74px 1fr 38px; gap: 8px; align-items: center; }
+  .row output { color: #cde; text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; }
+  #says { color: #fff; font-weight: 600; font-size: 14px; }
+  .meter { height: 6px; background: #112; } .meter i { display: block; height: 100%; width: 0; background: #3cf; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div id="says">—</div>
+  <div class="meter"><i id="level"></i></div>
+  <div id="rows"></div>
+</div>
+<script>
+// One row per engine knob: [key sent to the server, label, min, max, step]
+const KNOBS = [
+  ['audio_gain', 'Gain son', 0, 4, 0.05],
+  ['weight_gain', 'Réactivité', 0.5, 1, 0.01],
+  ['adapt', 'Fatigue', 0, 1, 0.05],
+  ['noise_amp', 'Bruit de fond', 0, 0.5, 0.01],
+];
+const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+fetch('/api/params').then(r => r.json()).then(now => {
+  for (const [key, label, min, max, step] of KNOBS) {
+    now[key] = +now[key].toFixed(2); // float32 on the server: 0.15 comes back as 0.15000000596
+    document.getElementById('rows').insertAdjacentHTML('beforeend',
+      `<div class="row"><span>${label}</span><input type="range" id="${key}" min="${min}" max="${max}" step="${step}" value="${now[key]}"><output id="o-${key}">${now[key]}</output></div>`);
+    document.getElementById(key).oninput = e => {
+      document.getElementById('o-' + key).textContent = e.target.value;
+      ws.send(JSON.stringify({ cmd: 'set_param', key, value: +e.target.value }));
+    };
+  }
+});
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type !== 'metrics' || !m.fly_says) return;
+  document.getElementById('says').textContent = (m.fly_says.verdict || '—').toUpperCase();
+  document.getElementById('level').style.width = (m.fly_says.level * 100) + '%';
+};
+</script>
+</body>
+</html>
