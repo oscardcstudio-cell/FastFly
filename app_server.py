@@ -49,6 +49,11 @@ async def stage():
     return FileResponse(os.path.join(static_dir, "stage.html"))
 
 
+@app.get("/trace")
+async def trace():
+    return FileResponse(os.path.join(static_dir, "trace.html"))
+
+
 @app.get("/api/positions")
 async def get_positions():
     """Return neuron 3D positions + class info for the brain visualizer."""
@@ -164,6 +169,8 @@ async def websocket_endpoint(ws: WebSocket):
                 value = msg.get("value")
                 if key == "noise_amp":
                     engine.set_noise_amp(float(value))
+                elif key == "frame_every":
+                    engine.frame_every = max(0, int(value))
                 elif key == "weight_gain":
                     engine.set_weight_gain(float(value))
                 elif key == "batch_size":

@@ -87,6 +87,10 @@ class SimEngine:
         # Live audio drive: group name -> (gpu indices, amplitude)
         self._audio = {}
 
+        # Frame recording for slow-motion replay: every Nth substep (0 = off)
+        self.frame_every = 0
+        self.max_edges_per_frame = 400
+
         # GPU accumulators for sync-free counting
         self.d_total_spikes = cp.zeros(1, dtype=cp.uint64)
 
@@ -294,6 +298,7 @@ class SimEngine:
         audio = [(idx, amp) for idx, amp in self._audio.values() if amp > 0]
         d_accum_bits = self.d_accum_bits
         d_accum_bits.fill(0)
+        hist = cp.empty((n, self.spike_words), dtype=cp.uint32) if self.frame_every else None
 
         for sub in range(n):
             d_num_spikes.fill(0)
@@ -311,6 +316,8 @@ class SimEngine:
                  np.uint32(self.seed), np.uint32(self.current_step),
                  self.noise_amp))
             cp.bitwise_or(d_accum_bits, d_spike_bits, out=d_accum_bits)
+            if hist is not None:
+                hist[sub] = d_spike_bits
 
             k_compact(
                 (compact_blocks,), (BLOCK,),
@@ -378,7 +385,45 @@ class SimEngine:
             self._last_spike_indices = cp.nonzero(bits)[0].astype(cp.int32).get()
             result["active_indices"] = self._last_spike_indices.tolist()
 
+        if hist is not None:
+            result["frames"] = self._frames(hist)
+
         return result
+
+    def _unpack(self, bits):
+        return cp.nonzero(cp.unpackbits(bits.view(cp.uint8), bitorder='little')[:self.n_neurons])[0]
+
+    def _frames(self, hist):
+        """Every Nth substep: who fired, and which synapses carried it.
+
+        An edge pre->post is kept when pre fired on the previous substep and
+        post fires now: that spike was (partly) caused through this synapse.
+        sign: +1 excitatory, -1 inhibitory.
+        """
+        frames = []
+        rng = cp.random.default_rng(self.current_step)
+        for t in range(max(1, self.frame_every), hist.shape[0], self.frame_every):
+            now = self._unpack(hist[t])
+            pre = self._unpack(hist[t - 1])
+            edges = []
+            if len(pre) and len(now):
+                starts = self.d_offsets[pre]
+                cnt = (self.d_offsets[pre + 1] - starts).astype(cp.int64)
+                total = int(cnt.sum())
+                if total:
+                    first = cp.cumsum(cnt) - cnt
+                    k = cp.arange(total, dtype=cp.int64) - cp.repeat(first, cnt)
+                    syn = cp.repeat(starts.astype(cp.int64), cnt) + k
+                    tgt = self.d_targets[syn].astype(cp.int64)
+                    fired = (hist[t][tgt >> 5] >> (tgt & 31).astype(cp.uint32)) & 1
+                    hit = cp.nonzero(fired)[0]
+                    if len(hit) > self.max_edges_per_frame:
+                        hit = hit[cp.argsort(rng.random(len(hit)))[:self.max_edges_per_frame]]
+                    src = cp.repeat(pre, cnt)[hit]
+                    sign = cp.sign(self.d_weights[syn[hit]].astype(cp.int32))
+                    edges = cp.stack([src.astype(cp.int64), tgt[hit], sign.astype(cp.int64)], axis=1).get().ravel().tolist()
+            frames.append({"s": now.get().tolist()[:3000], "e": edges})
+        return frames
 
     # --- Data accessors ---
 
