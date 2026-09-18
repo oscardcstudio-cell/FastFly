@@ -208,6 +208,14 @@ class SimEngine:
             if len(idx):
                 self._audio[prefix] = [cp.asarray(idx), 0.0]
         print(f"  audio groups: { {k: len(v[0]) for k, v in self._audio.items()} }")
+        # The fly's own reading of the music (fly_says.py): neurons wired directly to the bass ear.
+        self._bass_readout = None
+        if "JO-B" in self._audio:
+            off, tg = self.d_offsets.get(), self.d_targets.get()
+            ear = np.unique(np.concatenate([v[0].get() for v in self._audio.values()]))
+            hit = np.unique(np.concatenate([tg[off[i]:off[i + 1]] for i in self._audio["JO-B"][0].get()]))
+            self._bass_readout = cp.asarray(np.setdiff1d(hit, ear))
+            print(f"  bass readout: {len(self._bass_readout)} neurons")
 
     def set_audio(self, amps):
         """amps: {group: amplitude}, e.g. {'JO-A': 0.8}. Unknown groups ignored."""
@@ -386,6 +394,10 @@ class SimEngine:
             "mean_voltage": round(float(d_voltage.mean()), 4),
             "steps_per_sec": round(steps_per_sec, 1),
         }
+
+        if self._bass_readout is not None:
+            fired = cp.unpackbits(d_accum_bits.view(cp.uint8), bitorder='little')[:self.n_neurons]
+            result["bass_readout"] = float(fired[self._bass_readout].mean())
 
         # Group rates (for heatmap) — only compute if enabled
         if self.send_group_rates:

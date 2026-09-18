@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from sim_engine import SimEngine
+from fly_says import FlySays
 
 parser = argparse.ArgumentParser(description="FlyWire Simulator Web Server")
 parser.add_argument("--data", help="Binary connectome file")
@@ -40,6 +41,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 sim_running = False
 batch_size = 200
+fly_says = FlySays()
 clients: list[WebSocket] = []
 
 
@@ -135,6 +137,8 @@ async def sim_loop():
                 None, engine.step, batch_size
             )
             metrics["type"] = "metrics"
+            if "bass_readout" in metrics:
+                metrics["fly_says"] = fly_says.push(metrics["bass_readout"])
             # Cap active_indices to limit WebSocket payload size
             ai = metrics.get("active_indices", [])
             if len(ai) > 5000:

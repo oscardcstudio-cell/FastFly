@@ -26,6 +26,8 @@
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div id="meters"></div>
   <div id="info">Connexion...</div>
+  <div class="row"><span class="lbl">Fatigue</span><input type="range" id="adapt" min="0" max="1" step="0.05" value="0.3"></div>
+  <div id="flysays"></div>
   <div id="bgstate"></div>
   <div id="bgsec" style="color:#fff;font-weight:600"></div>
   <div id="bg"></div>
@@ -140,6 +142,10 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
+    if (m.type === 'metrics' && m.fly_says) {
+      document.getElementById('flysays').textContent = `mouche : ${(m.fly_says.verdict || '—').toUpperCase()}`;
+      if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
+    }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
     if (m.type === 'audio_levels') for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; }
     if (m.type === 'beatgrid_state') {
@@ -232,6 +238,8 @@ setInterval(() => {
 document.getElementById('gain').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'audio_gain', value: +e.target.value })); // server-side listening (--audio)
 document.getElementById('react').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'weight_gain', value: +e.target.value }));
 
+addEventListener('message', e => { if (e.data && e.data.source === 'dashboard' && e.data.cmd === 'toggle-params') document.getElementById('panel').classList.toggle('hidden'); });
+document.getElementById('adapt').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'adapt', value: +e.target.value }));
 // ?embed : the brain alone, as a panel inside the beatgrid dashboard (which has its own readouts)
 if (new URLSearchParams(location.search).has('embed')) document.getElementById('panel').classList.add('hidden');
 addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); });
