@@ -17,11 +17,15 @@ import asyncio, glob, json, os
 WARM = ("Temperature change", 0.5, 150)   # warm-coloured loop -> heat sensors
 COLD = ("Humidity change", 0.5, 150)      # cold-coloured loop -> humidity sensors
 BRIGHT = [("Light (left eye)", 0.15, 60), ("Light (right eye)", 0.15, 60)]  # bright loop -> the eye of its screen slot
+MOVING = [("Touch (left leg/body)", 0.4, 100), ("Touch (right leg/body)", 0.4, 100)]    # loop with a lot of motion -> touch, side of its slot
+FAST = [("Tickle (left antenna)", 0.4, 100), ("Tickle (right antenna)", 0.4, 100)]      # loop tagged "rapide" -> wind on the antenna of its slot
 SECTIONS = {
-    "drop": ("Sugar (proboscis)", 0.8, 200),       # the reward
-    "break": ("Odor (both antennae)", 0.4, 200),   # something in the air
+    "drop": [("Sugar (proboscis)", 0.8, 200)],       # the reward
+    "break": [("Odor (both antennae)", 0.4, 200)],   # something in the air
+    "suspension": FAST,                               # breath held: wind on both antennae
 }
-MIN_SATURATION, MIN_BRIGHT = 0.15, 0.31  # 0.31 = brightest quarter of Oscar's loops (max measured 0.57)
+# thresholds read on Oscar's 240 tagged loops: brightest quarter (max 0.57), most moving quarter
+MIN_SATURATION, MIN_BRIGHT, MIN_MOTION = 0.15, 0.31, 4.16
 
 
 def senses_for(tags, slot=0):
@@ -35,13 +39,17 @@ def senses_for(tags, slot=0):
             taps.append(COLD)
     if (tags.get("clarte") or 0) >= MIN_BRIGHT:
         taps.append(BRIGHT[slot % 2])
+    if (tags.get("mouvement") or 0) >= MIN_MOTION:
+        taps.append(MOVING[slot % 2])
+    if tags.get("vitesse") == "rapide":
+        taps.append(FAST[slot % 2])
     return taps
 
 
 def taps_for(event, tags_by_column):
     kind = event.get("kind")
     if kind in SECTIONS:
-        return [SECTIONS[kind]]
+        return list(SECTIONS[kind])
     if kind == "pattern":
         return [t for slot, col in enumerate(event.get("colonnes") or [])
                 for t in senses_for(tags_by_column.get(col, {}), slot)]
@@ -110,7 +118,9 @@ if __name__ == "__main__":
     assert senses_for(red) == [WARM]
     assert senses_for(blue, slot=1) == [COLD, BRIGHT[1]]
     assert senses_for(grey) == [] and senses_for({}) == []
-    assert taps_for({"kind": "drop", "bar": 3}, {}) == [SECTIONS["drop"]]
+    assert taps_for({"kind": "drop", "bar": 3}, {}) == SECTIONS["drop"]
+    assert taps_for({"kind": "suspension"}, {}) == FAST
+    assert senses_for({"mouvement": 9.0, "vitesse": "rapide"}, slot=1) == [MOVING[1], FAST[1]]
     assert taps_for({"kind": "pattern", "colonnes": [5, 9, 404]}, {5: red, 9: blue}) == [WARM, COLD, BRIGHT[1]]
     assert taps_for({"kind": "tap"}, {}) == []
     print("mapping ok")

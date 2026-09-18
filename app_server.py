@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser(description="FlyWire Simulator Web Server")
 parser.add_argument("--data", help="Binary connectome file")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, default=8000)
+parser.add_argument("--audio", action="store_true", help="The fly hears what the computer plays (WASAPI loopback), no browser needed")
 parser.add_argument("--replay", help="With --beatgrid: play this past session journal (.jsonl) instead of the live one")
 parser.add_argument("--beatgrid", help="Path to the vj-rien repo: its sequencer feeds the fly senses")
 args = parser.parse_args()
@@ -39,6 +40,28 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 sim_running = False
 batch_size = 200
 clients: list[WebSocket] = []
+
+
+audio_gain = 1.0
+audio_levels = {}
+
+
+@app.on_event("startup")
+async def start_audio_in():
+    if not args.audio:
+        return
+    import audio_in
+
+    def on_levels(levels):  # audio thread: set_audio only stores floats
+        audio_levels.update(levels)
+        engine.set_audio({k: v * audio_gain for k, v in levels.items()})
+    app.state.audio_stop = audio_in.start(on_levels)  # keep it: a dropped stream is garbage-collected and goes silent
+
+    async def show():  # the pages' meters, so Oscar sees the sound arrive
+        while True:
+            await broadcast({"type": "audio_levels", "levels": audio_levels})
+            await asyncio.sleep(0.1)
+    asyncio.create_task(show())
 
 
 @app.on_event("startup")
@@ -118,7 +141,7 @@ async def sim_loop():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    global sim_running, batch_size
+    global sim_running, batch_size, audio_gain
 
     await ws.accept()
     clients.append(ws)
@@ -192,6 +215,8 @@ async def websocket_endpoint(ws: WebSocket):
                     engine.frame_every = max(0, int(value))
                 elif key == "adapt":
                     engine.set_adapt(float(value))
+                elif key == "audio_gain":
+                    audio_gain = max(0.0, min(4.0, float(value)))
                 elif key == "audio_mute":
                     engine.audio_mute = bool(value)
                 elif key == "weight_gain":

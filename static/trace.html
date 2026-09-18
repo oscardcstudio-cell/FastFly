@@ -5,6 +5,7 @@
 <title>Fly Trace</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="/static/edges.js"></script>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 12px system-ui, sans-serif; color: #9ab; }
   canvas { display: block; }
@@ -43,7 +44,6 @@ const BANDS = [
   { group: 'JO-E', lo: 20,   hi: 16000 },
 ];
 const GLOW = [0.2, 0.85, 1.0];
-const EXC = [0.1, 0.6, 1.0], INH = [1.0, 0.2, 0.6]; // excitatory / inhibitory synapse
 const MAX_SEG = 60000;
 let DECAY = 0.96;
 
@@ -92,37 +92,12 @@ fetch('/api/positions').then(r => r.json()).then(data => {
   glow = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.02, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
   scene.add(glow);
 
-  const lg = new THREE.BufferGeometry();
-  lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_SEG * 6), 3));
-  lg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_SEG * 6), 3));
-  lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-  scene.add(lines);
+  trail = makeEdgeTrail(scene, pos, MAX_SEG);
 });
 
-// ---- Edges: ring buffer of segments, each fading like the neuron trail ----
-let lines = null, segN = 0, segHead = 0;
-const segI = new Float32Array(MAX_SEG), segRGB = new Float32Array(MAX_SEG * 3);
-function addEdges(e) {
-  if (!lines) return;
-  const p = lines.geometry.attributes.position.array;
-  for (let k = 0; k < e.length; k += 3) {
-    const a = e[k], b = e[k + 1], c = e[k + 2] > 0 ? EXC : INH, j = segHead;
-    p.set(pos.subarray(a * 3, a * 3 + 3), j * 6); p.set(pos.subarray(b * 3, b * 3 + 3), j * 6 + 3);
-    segI[j] = 1; segRGB.set(c, j * 3);
-    segHead = (segHead + 1) % MAX_SEG; segN = Math.min(MAX_SEG, segN + 1);
-  }
-  lines.geometry.attributes.position.needsUpdate = true;
-}
-function drawEdges() {
-  if (!lines) return;
-  const col = lines.geometry.attributes.color.array;
-  for (let j = 0; j < segN; j++) {
-    const v = (segI[j] *= DECAY);
-    for (let q = 0; q < 3; q++) col[j * 6 + q] = col[j * 6 + 3 + q] = segRGB[j * 3 + q] * v * 0.6;
-  }
-  lines.geometry.setDrawRange(0, segN * 2);
-  lines.geometry.attributes.color.needsUpdate = true;
-}
+// ---- Edges: fading trail of the synapses that fired (edges.js) ----
+let trail = null;
+const addEdges = e => trail && trail.add(e), drawEdges = () => trail && trail.draw(DECAY);
 
 // ---- Replay queue: pull one batch at a time, play its substep frames slowly ----
 const queue = [];
@@ -214,7 +189,7 @@ function setSense(name) {
   if (!sense) return;
   send({ cmd: 'reset' });
   send({ cmd: 'stimulus_preset', name: sense, amplitude: +document.getElementById('amp').value });
-  queue.length = 0; segI.fill(0); intensity.fill(0); live = []; // wipe old trails: the path starts from black
+  queue.length = 0; trail && trail.clear(); intensity && intensity.fill(0); live = []; // wipe old trails: the path starts from black
 }
 function buildSenses(names) {
   const box = document.getElementById('senses');
