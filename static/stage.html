@@ -232,6 +232,8 @@ setInterval(() => {
 document.getElementById('gain').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'audio_gain', value: +e.target.value })); // server-side listening (--audio)
 document.getElementById('react').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'weight_gain', value: +e.target.value }));
 
+// ?embed : the brain alone, as a panel inside the beatgrid dashboard (which has its own readouts)
+if (new URLSearchParams(location.search).has('embed')) document.getElementById('panel').classList.add('hidden');
 addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); });
 </script>
 </body>
