@@ -49,6 +49,7 @@ class SimEngine:
         w_int8, w_scales = quantize_weights_int8(weights, offsets, self.n_neurons)
         self.d_weights = cp.asarray(w_int8)
         self.d_weight_scales = cp.asarray(w_scales)
+        self._base_weight_scales = self.d_weight_scales.copy()
 
         # GPU arrays — neuron state
         rng = cp.random.default_rng(seed)
@@ -80,6 +81,11 @@ class SimEngine:
 
         # Last-step spike indices (for 3D viz)
         self._last_spike_indices = np.array([], dtype=np.int32)
+        # OR of spike bits over a whole batch, so the viz sees every neuron that fired
+        self.d_accum_bits = cp.zeros(self.spike_words, dtype=cp.uint32)
+
+        # Live audio drive: group name -> (gpu indices, amplitude)
+        self._audio = {}
 
         # GPU accumulators for sync-free counting
         self.d_total_spikes = cp.zeros(1, dtype=cp.uint64)
@@ -88,7 +94,7 @@ class SimEngine:
         self.send_active_indices = True
         self.send_group_rates = True
         self.send_motor_rates = True
-        self.active_indices_interval = 3  # only transfer every Nth batch
+        self.active_indices_interval = 1  # only transfer every Nth batch
         self._batch_counter = 0
 
         # Load annotations
@@ -161,6 +167,7 @@ class SimEngine:
                 indices = self._body_motor[name]
                 self._neuron_to_motor[cp.asarray(indices.astype(np.int64))] = g
 
+            self._build_audio_groups(data)
             self._use_annotations = True
             print(f"  {len(self._stimuli)} stimuli, {self.num_groups} heatmap groups")
             print(f"  {len(self._body_sensory)} body sensory, {len(self._body_motor)} body motor")
@@ -173,6 +180,30 @@ class SimEngine:
             self._super_class = None
             self._setup_fallback_groups()
             self._use_annotations = False
+
+    # Johnston's organ subtypes (FlyWire cell_type / cell_sub_class prefixes).
+    # JO-A/B hear sound and vibration, JO-C/E sense wind and gravity.
+    AUDIO_PREFIXES = ("JO-A", "JO-B", "JO-C", "JO-E")
+
+    def _build_audio_groups(self, data):
+        cols = [np.asarray(data[k]).astype(str) for k in ("cell_type", "cell_sub_class") if k in data]
+        for prefix in self.AUDIO_PREFIXES:
+            mask = np.zeros(self.n_neurons, dtype=bool)
+            for col in cols:
+                mask |= np.char.startswith(np.char.upper(col), prefix)
+            idx = np.nonzero(mask)[0]
+            if len(idx):
+                self._audio[prefix] = [cp.asarray(idx), 0.0]
+        print(f"  audio groups: { {k: len(v[0]) for k, v in self._audio.items()} }")
+
+    def set_audio(self, amps):
+        """amps: {group: amplitude}, e.g. {'JO-A': 0.8}. Unknown groups ignored."""
+        for name, amp in amps.items():
+            if name in self._audio:
+                self._audio[name][1] = max(0.0, min(5.0, float(amp)))
+
+    def get_audio_groups(self):
+        return {k: int(len(v[0])) for k, v in self._audio.items()}
 
     def _setup_fallback_groups(self):
         """Fallback: equal-size index-range groups."""
@@ -205,6 +236,14 @@ class SimEngine:
     def clear_stimulus(self):
         self._stimulus_indices = None
         self._stimulus_amplitude = 0.0
+
+    def set_weight_gain(self, g):
+        """Scale all synapses. Above ~0.85 the net latches into self-sustained firing."""
+        self.d_weight_scales[:] = self._base_weight_scales * float(g)
+
+    def reset_state(self):
+        self.d_voltage.fill(0)
+        self.d_current.fill(0)
 
     def set_noise_amp(self, value):
         self.noise_amp = np.float32(value)
@@ -252,12 +291,17 @@ class SimEngine:
         spike_words_i32 = np.int32(self.spike_words)
         stim_indices = self._stimulus_indices
         stim_amp = self._stimulus_amplitude
+        audio = [(idx, amp) for idx, amp in self._audio.values() if amp > 0]
+        d_accum_bits = self.d_accum_bits
+        d_accum_bits.fill(0)
 
         for sub in range(n):
             d_num_spikes.fill(0)
 
             if stim_indices is not None:
                 d_current[stim_indices] += stim_amp
+            for idx, amp in audio:
+                d_current[idx] += amp
 
             k_update_with_noise(
                 (neuron_blocks,), (BLOCK,),
@@ -266,6 +310,7 @@ class SimEngine:
                  self.tau_decay, self.v_threshold, self.v_reset,
                  np.uint32(self.seed), np.uint32(self.current_step),
                  self.noise_amp))
+            cp.bitwise_or(d_accum_bits, d_spike_bits, out=d_accum_bits)
 
             k_compact(
                 (compact_blocks,), (BLOCK,),
@@ -329,11 +374,8 @@ class SimEngine:
         # Active indices (for 3D viz) — only transfer every Nth batch
         self._batch_counter += 1
         if self.send_active_indices and self._batch_counter % self.active_indices_interval == 0:
-            num_last = int(d_num_spikes[0])
-            if num_last > 0:
-                self._last_spike_indices = d_spike_idx[:num_last].get().astype(np.int32)
-            else:
-                self._last_spike_indices = np.array([], dtype=np.int32)
+            bits = cp.unpackbits(d_accum_bits.view(cp.uint8), bitorder='little')[:self.n_neurons]
+            self._last_spike_indices = cp.nonzero(bits)[0].astype(cp.int32).get()
             result["active_indices"] = self._last_spike_indices.tolist()
 
         return result

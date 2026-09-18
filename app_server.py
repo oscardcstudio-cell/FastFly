@@ -44,6 +44,11 @@ async def index():
     return FileResponse(os.path.join(static_dir, "index.html"))
 
 
+@app.get("/stage")
+async def stage():
+    return FileResponse(os.path.join(static_dir, "stage.html"))
+
+
 @app.get("/api/positions")
 async def get_positions():
     """Return neuron 3D positions + class info for the brain visualizer."""
@@ -79,7 +84,8 @@ async def sim_loop():
             # Cap active_indices to limit WebSocket payload size
             ai = metrics.get("active_indices", [])
             if len(ai) > 5000:
-                metrics["active_indices"] = ai[:5000]
+                # even stride, so capping doesn't bias the viz toward low indices
+                metrics["active_indices"] = ai[::-(-len(ai) // 5000)]
             await broadcast(metrics)
             await asyncio.sleep(0)
         except Exception as e:
@@ -103,6 +109,7 @@ async def websocket_endpoint(ws: WebSocket):
         "stimuli": engine.get_predefined_stimuli(),
         "group_labels": engine.group_labels,
         "body_info": engine.get_body_info(),
+        "audio_groups": engine.get_audio_groups(),
     }))
     await ws.send_text(json.dumps({
         "type": "state",
@@ -143,6 +150,12 @@ async def websocket_endpoint(ws: WebSocket):
                 amplitude = float(msg.get("amplitude", 0.5))
                 engine.apply_predefined_stimulus(name, amplitude)
 
+            elif cmd == "audio":
+                engine.set_audio(msg.get("amps", {}))
+
+            elif cmd == "reset":
+                engine.reset_state()
+
             elif cmd == "clear_stimulus":
                 engine.clear_stimulus()
 
@@ -151,6 +164,8 @@ async def websocket_endpoint(ws: WebSocket):
                 value = msg.get("value")
                 if key == "noise_amp":
                     engine.set_noise_amp(float(value))
+                elif key == "weight_gain":
+                    engine.set_weight_gain(float(value))
                 elif key == "batch_size":
                     batch_size = max(1, min(500, int(value)))
                 elif key == "send_active_indices":

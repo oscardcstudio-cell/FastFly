@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Fly Stage</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 12px system-ui, sans-serif; color: #9ab; }
+  canvas { display: block; }
+  #panel { position: fixed; top: 12px; left: 12px; background: rgba(0,0,0,.7); padding: 10px 12px; border: 1px solid #234; border-radius: 6px; display: grid; gap: 6px; min-width: 260px; }
+  #panel.hidden { display: none; }
+  #panel select, #panel button { font: inherit; background: #0b1520; color: #cde; border: 1px solid #345; padding: 4px 6px; border-radius: 4px; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .meter { flex: 1; height: 6px; background: #112; }
+  .meter i { display: block; height: 100%; width: 0; background: #3cf; }
+  .lbl { width: 42px; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="row"><select id="dev"><option value="">Entrée audio...</option></select></div>
+  <div class="row"><button id="sys">Son système (partage)</button><button id="demo">Démo 120 BPM</button></div>
+  <div class="row"><span class="lbl">Gain</span><input type="range" id="gain" min="0" max="4" step="0.05" value="1"></div>
+  <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
+  <div id="meters"></div>
+  <div id="info">Connexion...</div>
+  <div style="opacity:.6">H : masquer ce panneau</div>
+</div>
+<script>
+// Artistic mapping, not physiology: bass -> JO-B, mids -> JO-A, highs -> JO-C, loudness -> JO-E
+const BANDS = [
+  { group: 'JO-B', lo: 20,   hi: 150 },
+  { group: 'JO-A', lo: 150,  hi: 2000 },
+  { group: 'JO-C', lo: 2000, hi: 16000 },
+  { group: 'JO-E', lo: 20,   hi: 16000 },
+];
+const GLOW = [0.2, 0.85, 1.0];
+const DECAY = 0.88;
+
+// ---- 3D ----
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(0, 0, 1.6);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.4;
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+let N = 0, pos = null, glow = null, intensity = null, live = [];
+
+fetch('/api/positions').then(r => r.json()).then(data => {
+  N = data.n_neurons;
+  const raw = atob(data.positions_b64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  pos = new Float32Array(bytes.buffer);
+  // same normalization as index.html (FAFB voxels are 4x4x40 nm, X mirrored)
+  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pos.length; i++) { const a = i % 3; if (pos[i] < mn[a]) mn[a] = pos[i]; if (pos[i] > mx[a]) mx[a] = pos[i]; }
+  const c = mn.map((v, a) => (v + mx[a]) / 2);
+  const s = Math.max(...mn.map((v, a) => (mx[a] - v) / 2)) || 1;
+  for (let i = 0; i < pos.length; i += 3) {
+    pos[i] = -(pos[i] - c[0]) / s; pos[i + 1] = (pos[i + 1] - c[1]) / s; pos[i + 2] = (pos[i + 2] - c[2]) / s * 10;
+  }
+  const base = new THREE.BufferGeometry();
+  base.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(base, new THREE.PointsMaterial({ size: 0.006, color: 0x1a1030, transparent: true, opacity: 0.8, depthWrite: false })));
+
+  intensity = new Float32Array(N);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+  g.setDrawRange(0, 0);
+  glow = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.02, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  scene.add(glow);
+});
+
+function onSpikes(indices) {
+  if (!intensity) return;
+  for (const i of indices) { if (intensity[i] === 0) live.push(i); intensity[i] = 1; }
+}
+
+function drawGlow() {
+  if (!glow) return;
+  const p = glow.geometry.attributes.position.array, col = glow.geometry.attributes.color.array;
+  let n = 0;
+  const next = [];
+  for (const i of live) {
+    const v = intensity[i] * DECAY;
+    if (v < 0.03) { intensity[i] = 0; continue; }
+    intensity[i] = v; next.push(i);
+    p[n * 3] = pos[i * 3]; p[n * 3 + 1] = pos[i * 3 + 1]; p[n * 3 + 2] = pos[i * 3 + 2];
+    col[n * 3] = GLOW[0] * v; col[n * 3 + 1] = GLOW[1] * v; col[n * 3 + 2] = GLOW[2] * v;
+    n++;
+  }
+  live = next;
+  glow.geometry.setDrawRange(0, n);
+  glow.geometry.attributes.position.needsUpdate = true;
+  glow.geometry.attributes.color.needsUpdate = true;
+}
+
+(function loop() { requestAnimationFrame(loop); drawGlow(); controls.update(); renderer.render(scene, camera); })();
+
+// ---- Sim link ----
+const info = document.getElementById('info');
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  const send = o => ws.send(JSON.stringify(o));
+  ws.onopen = () => {
+    // quiet at rest: little noise, synapses just below the self-sustaining point
+    send({ cmd: 'set_param', key: 'noise_amp', value: 0.15 });
+    send({ cmd: 'set_param', key: 'weight_gain', value: +document.getElementById('react').value });
+    send({ cmd: 'reset' });
+    send({ cmd: 'start' });
+  };
+  ws.onclose = () => { info.textContent = 'Simulation déconnectée, reconnexion...'; setTimeout(connect, 1000); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
+    if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
+  };
+}
+connect();
+
+// ---- Audio ----
+const meters = document.getElementById('meters');
+BANDS.forEach(b => meters.insertAdjacentHTML('beforeend', `<div class="row"><span class="lbl">${b.group}</span><div class="meter"><i id="m-${b.group}"></i></div></div>`));
+let actx, analyser, bins;
+
+async function useStream(stream) {
+  actx = actx || new AudioContext();
+  analyser = actx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.6;
+  actx.createMediaStreamSource(stream).connect(analyser);
+  bins = new Float32Array(analyser.frequencyBinCount);
+}
+
+async function listDevices() {
+  await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop())).catch(() => {});
+  const sel = document.getElementById('dev');
+  (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')
+    .forEach(d => sel.insertAdjacentHTML('beforeend', `<option value="${d.deviceId}">${d.label || d.deviceId}</option>`));
+}
+listDevices();
+
+// Synthetic 120 BPM kick + hat, to test without any audio routing
+document.getElementById('demo').onclick = () => {
+  actx = actx || new AudioContext();
+  const dest = actx.createMediaStreamDestination();
+  const noise = actx.createBuffer(1, actx.sampleRate * 0.05, actx.sampleRate);
+  noise.getChannelData(0).forEach((_, i, a) => a[i] = Math.random() * 2 - 1);
+  let t = actx.currentTime + 0.1;
+  setInterval(() => {
+    while (t < actx.currentTime + 0.5) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.15);
+      g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      o.connect(g).connect(dest); o.start(t); o.stop(t + 0.3);
+      const h = actx.createBufferSource(), f = actx.createBiquadFilter(), hg = actx.createGain();
+      h.buffer = noise; f.type = 'highpass'; f.frequency.value = 7000; hg.gain.value = 0.5;
+      h.connect(f).connect(hg).connect(dest); h.start(t + 0.25);
+      t += 0.5;
+    }
+  }, 100);
+  useStream(dest.stream);
+};
+
+const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+document.getElementById('dev').onchange = async e => {
+  if (e.target.value) useStream(await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: e.target.value }, ...RAW } }));
+};
+document.getElementById('sys').onclick = async () => {
+  const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: RAW });
+  s.getVideoTracks().forEach(t => t.stop());
+  useStream(s);
+};
+
+setInterval(() => {
+  if (!analyser || !ws || ws.readyState !== 1) return;
+  analyser.getFloatFrequencyData(bins);
+  const hz = actx.sampleRate / analyser.fftSize;
+  const gain = +document.getElementById('gain').value;
+  const amps = {};
+  for (const b of BANDS) {
+    let sum = 0, k = 0;
+    // average power, not average dB: a few loud bins (a hat) must show in a wide band
+    for (let i = Math.floor(b.lo / hz); i <= Math.min(bins.length - 1, Math.ceil(b.hi / hz)); i++, k++) sum += 10 ** (bins[i] / 10);
+    const level = Math.max(0, Math.min(1, (10 * Math.log10(sum / k + 1e-12) + 80) / 60)); // -80..-20 dB -> 0..1
+    amps[b.group] = level * gain;
+    document.getElementById('m-' + b.group).style.width = (level * 100) + '%';
+  }
+  ws.send(JSON.stringify({ cmd: 'audio', amps }));
+}, 33);
+
+document.getElementById('react').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'weight_gain', value: +e.target.value }));
+
+addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); });
+</script>
+</body>
+</html>
