@@ -47,7 +47,10 @@ const DECAY = 0.88;
 // ---- 3D ----
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.01, 100);
+// the brain is ~2.2 wide for ~1 high: in a narrow frame (dashboard panel) step back until it fits instead of cropping the eyes
+const frame = () => { camera.aspect = innerWidth / innerHeight; camera.position.setLength(1.6 * Math.max(1, 1.9 / camera.aspect)); camera.updateProjectionMatrix(); };
 camera.position.set(0, 0, 1.6);
+frame();
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
@@ -57,7 +60,7 @@ controls.enableDamping = true;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.4;
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  frame();
   renderer.setSize(innerWidth, innerHeight);
 });
 
@@ -184,7 +187,7 @@ async function listDevices() {
   (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')
     .forEach(d => sel.insertAdjacentHTML('beforeend', `<option value="${d.deviceId}">${d.label || d.deviceId}</option>`));
 }
-listDevices();
+if (!new URLSearchParams(location.search).has('embed')) listDevices(); // embedded: the server hears the computer, never ask for a mic
 
 // Synthetic 120 BPM kick + hat, to test without any audio routing
 document.getElementById('demo').onclick = () => {
