@@ -121,6 +121,13 @@ async def get_params():
                          "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp)})
 
 
+@app.get("/api/senses")
+async def get_senses():
+    """The sequencer-to-sense table, so /params can show each sense and fire it by hand."""
+    from beatgrid_bridge import senses_table
+    return JSONResponse(senses_table())
+
+
 @app.get("/api/positions")
 async def get_positions():
     """Return neuron 3D positions + class info for the brain visualizer."""

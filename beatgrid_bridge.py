@@ -24,6 +24,18 @@ SECTIONS = {
     "break": [("Odor (both antennae)", 0.4, 200)],   # something in the air
     "suspension": FAST,                               # breath held: wind on both antennae
 }
+# What the pages show for each sense: (taps, French label, what fires it). /params lists them as buttons; two taps = left, right.
+LABELS = [([WARM], "chaleur", "loop chaude"), ([COLD], "humidité", "loop froide"),
+          (BRIGHT, "œil", "loop claire"), (MOVING, "toucher", "loop mobile"),
+          (FAST, "vent antenne", "loop rapide · suspension"),
+          (SECTIONS["drop"], "sucre", "drop"), (SECTIONS["break"], "odeur", "break")]
+
+
+def senses_table():
+    return [{"label": fr, "when": when, "taps": [{"name": n, "amplitude": a, "steps": st} for n, a, st in taps]}
+            for taps, fr, when in LABELS]
+
+
 # thresholds read on Oscar's 240 tagged loops: brightest quarter (max 0.57), most moving quarter
 MIN_SATURATION, MIN_BRIGHT, MIN_MOTION = 0.15, 0.31, 4.16
 

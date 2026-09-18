@@ -11,6 +11,11 @@
   .row output { color: #cde; text-align: right; font-variant-numeric: tabular-nums; }
   input[type=range] { width: 100%; }
   #says { color: #fff; font-weight: 600; font-size: 14px; }
+  #senses { display: grid; gap: 6px; }
+  #senses div { display: flex; gap: 6px; align-items: center; }
+  #senses span { flex: 1; color: #cde; } #senses small { color: #678; margin-left: 8px; }
+  #senses button { font: inherit; width: 34px; background: #0b1520; color: #cde; border: 1px solid #345; border-radius: 4px; padding: 5px 0; cursor: pointer; transition: background .6s, color .6s; }
+  #senses button.on { background: #3cf; color: #000; transition: none; }
   .meter { height: 6px; background: #112; } .meter i { display: block; height: 100%; width: 0; background: #3cf; }
 </style>
 </head>
@@ -19,6 +24,7 @@
   <div id="says">—</div>
   <div class="meter"><i id="level"></i></div>
   <div id="rows"></div>
+  <div id="senses"></div>
 </div>
 <script>
 // One row per engine knob: [key sent to the server, label, min, max, step]
@@ -40,8 +46,23 @@ fetch('/api/params').then(r => r.json()).then(now => {
     };
   }
 });
+// One button per sense: lights when the sequencer fires it, click fires it by hand
+const senseBtn = {};
+const flash = name => { const b = senseBtn[name]; if (!b) return; b.classList.add('on'); setTimeout(() => b.classList.remove('on'), 150); };
+fetch('/api/senses').then(r => r.json()).then(list => list.forEach(s => {
+  const cell = document.createElement('div');
+  cell.innerHTML = `<span>${s.label}<small>${s.when}</small></span>`;
+  s.taps.forEach((t, i) => {
+    const b = senseBtn[t.name] = document.createElement('button');
+    b.textContent = s.taps.length > 1 ? 'GD'[i] : '●';
+    b.onclick = () => { ws.send(JSON.stringify({ cmd: 'tap', ...t })); flash(t.name); };
+    cell.appendChild(b);
+  });
+  document.getElementById('senses').appendChild(cell);
+}));
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
+  if (m.type === 'beatgrid') flash(m.sense);
   if (m.type !== 'metrics' || !m.fly_says) return;
   document.getElementById('says').textContent = (m.fly_says.verdict || '—').toUpperCase();
   document.getElementById('level').style.width = (m.fly_says.level * 100) + '%';
