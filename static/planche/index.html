@@ -45,7 +45,7 @@
   /* ---- main layout ---- */
   main{flex:1 1 auto;min-height:0;display:flex;gap:22px;}
   .col{display:flex;flex-direction:column;gap:10px;min-height:0;}
-  .col-oreille{flex:0 0 500px;}
+  .col-oreille{flex:0 0 560px;}
   .col-sequenceur{flex:1 1 auto;}
   .col-label{flex:none;font-size:13px;font-weight:700;letter-spacing:1.2px;color:var(--text);
     text-transform:uppercase;display:flex;align-items:baseline;gap:8px;}
@@ -55,18 +55,18 @@
   .cards-sequenceur{flex:1 1 auto;min-height:0;display:grid;
     grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:16px;}
 
-  /* ---- oreille card (small, horizontal) ---- */
+  /* ---- oreille card (canvas on top, full width -> le cerveau est enfin visible) ---- */
   .card-o{flex:1 1 0;min-height:0;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;display:flex;align-items:stretch;padding:10px 14px;gap:14px;}
-  .card-o canvas{flex:none;width:118px;height:100%;border-radius:6px;background:#000;}
-  .card-o .info{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:4px;}
-  .card-o .label{font-size:15px;font-weight:600;color:#fff;line-height:1.15;}
-  .card-o .src{font-size:11.5px;color:var(--dim2);font-family:"Cascadia Code",Consolas,monospace;}
-  .card-o .nums{font-size:13px;color:var(--dim);margin-top:2px;}
+    border-radius:10px;display:flex;flex-direction:column;padding:9px 14px 8px;gap:5px;}
+  .card-o .top-row{flex:none;display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+  .card-o canvas{flex:1 1 auto;width:100%;min-height:0;border-radius:6px;background:#000;}
+  .card-o .label{font-size:14px;font-weight:600;color:#fff;line-height:1.15;}
+  .card-o .nums{flex:none;font-size:13px;color:var(--dim);}
   .card-o .nums b{color:var(--cyan);font-weight:700;}
   .card-o .nums .arrow{color:var(--dim2);margin:0 5px;}
   .card-o .nums .aval{color:var(--pink);font-weight:700;}
-  .bar-track{height:5px;border-radius:3px;background:#1a1f2a;overflow:hidden;margin-top:4px;}
+  .card-o .tags{margin-top:1px;}
+  .bar-track{height:5px;border-radius:3px;background:#1a1f2a;overflow:hidden;margin-top:2px;}
   .bar-fill{height:100%;background:linear-gradient(90deg,var(--pink),#ff8fc0);border-radius:3px;}
 
   /* ---- sequenceur card (large) ---- */
@@ -77,7 +77,6 @@
   .card-s .top-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
   .card-s .label{font-size:17px;font-weight:700;color:#fff;}
   .card-s .sense{font-size:12.5px;color:var(--dim);}
-  .card-s .src{font-size:11px;color:var(--dim2);font-family:"Cascadia Code",Consolas,monospace;}
   .card-s canvas{flex:1 1 auto;width:100%;min-height:0;border-radius:8px;background:#000;}
   .card-s .nums{font-size:15px;color:var(--dim);display:flex;align-items:baseline;gap:4px;}
   .card-s .nums b{color:var(--cyan);font-weight:700;font-size:16px;}
@@ -101,18 +100,19 @@
       <div class="legend">
         <div class="legend-item"><span class="dot cyan"></span>neurones <b>source</b> — directement stimulés</div>
         <div class="legend-item"><span class="dot pink"></span>neurones en <b>aval</b> — le chemin allumé ensuite</div>
-        <div class="legend-item"><span class="sq"></span>chaud, froid, break convergent sur la <b>même zone d'arrivée</b> (corps pédonculé / lobe antennaire)</div>
-        <div class="legend-item">barre rose = part des neurones en aval, <b>même échelle</b> sur les 10 cartes · JO = organe de Johnston (l'oreille)</div>
+        <div class="legend-item"><span class="sq"></span>chaud, froid, break allument <b>presque les mêmes neurones</b> — mémoire et réflexes olfactifs</div>
+        <div class="legend-item">barre rose = part des neurones en aval, <b>même échelle</b> sur les 10 cartes</div>
+        <div class="legend-item">vue de face, comme à l'écran — <b>gauche/droite inversées</b> (repères G·D sur chaque cerveau)</div>
       </div>
     </header>
 
     <main>
       <div class="col col-oreille">
-        <div class="col-label">Oreille <span class="sub">— peu de neurones s'allument en aval</span></div>
+        <div class="col-label">Oreille <span class="sub">— organe de Johnston, peu de neurones s'allument en aval</span></div>
         <div class="cards-oreille" id="cards-oreille"></div>
       </div>
       <div class="col col-sequenceur">
-        <div class="col-label">Séquenceur (beatgrid) <span class="sub">— le signal se propage beaucoup plus loin</span></div>
+        <div class="col-label">Séquenceur <span class="sub">— boucles vidéo (+ audio direct pour chaud/froid) · le signal se propage beaucoup plus loin</span></div>
         <div class="cards-sequenceur" id="cards-sequenceur"></div>
       </div>
     </main>
@@ -130,6 +130,29 @@ const SENSE = {
   drop:   "goût du sucre (trompe)",
   break:  "odorat (antennes)"
 };
+// libellés à jour (2026-09-19) : chaud/froid déclenchés aussi par le son, sans toucher data.json
+const LABEL_OVERRIDE = {
+  chaud: "Chaud — bas-médiums (200-500 Hz) + loop",
+  froid: "Froid — aigus (4-16 kHz) + loop"
+};
+// codes de classes neuronales -> mots compréhensibles sans bio (data.json garde les codes bruts)
+const GLOSSARY = {
+  Kenyon_Cell: "mémoire",
+  ALPN: "odorat → relais",
+  ALLN: "odorat (traitement)",
+  ALIN: "odorat (entrée)",
+  LHLN: "odorat → réflexe",
+  MBON: "sortie mémoire",
+  ME: "vision (médulla)",
+  LO: "vision (lobula)",
+  LA: "vision (lamina)",
+  "ME>LA": "vision médulla→lamina",
+  "ME>LO": "vision médulla→lobula",
+  AN: "remonte au cerveau",
+  brain_motor_neuron: "moteur",
+  bilateral: "relie les 2 côtés"
+};
+const glossify = name => GLOSSARY[name] || name;
 const SHARED = new Set(["chaud","froid","break"]);
 const OREILLE_ORDER = ["basses","mediums","aigus","volume"];
 const SEQ_ORDER = ["chaud","froid","clair_g","clair_d","drop","break"];
@@ -173,35 +196,35 @@ function makeOreilleCard(input, maxDown){
   const el = document.createElement('div');
   el.className = 'card-o';
   const pct = Math.max(2, Math.round(input.n_downstream/maxDown*100));
+  const tags = input.top_cell_class.slice(0,3)
+    .map(([name,n]) => `<span class="tag">${glossify(name)} ×${n}</span>`).join('');
   el.innerHTML = `
+    <div class="top-row"><div class="label">${LABEL_OVERRIDE[input.id] || input.label}</div></div>
     <canvas data-id="${input.id}"></canvas>
-    <div class="info">
-      <div class="label">${input.label}</div>
-      <div class="src">${input.source_name}</div>
-      <div class="nums"><b>${input.n_source}</b><span class="arrow">→</span><span class="aval">${input.n_downstream}</span> en aval</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-    </div>`;
+    <div class="nums"><b>${input.n_source}</b><span class="arrow">→</span><span class="aval">${input.n_downstream}</span> en aval</div>
+    <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+    ${tags ? `<div class="tags">${tags}</div>` : ''}`;
   return el;
 }
 
 function makeSeqCard(input, maxDown){
   const el = document.createElement('div');
-  el.className = 'card-s' + (SHARED.has(input.id) ? ' shared' : '');
+  const shared = SHARED.has(input.id);
+  el.className = 'card-s' + (shared ? ' shared' : '');
   const pct = Math.max(1.5, Math.round(input.n_downstream/maxDown*1000)/10);
-  const tags = input.top_cell_class.slice(0,4)
-    .map(([name,n]) => `<span class="tag">${name} ×${n}</span>`).join('');
+  const tags = shared ? '' : input.top_cell_class.slice(0,4)
+    .map(([name,n]) => `<span class="tag">${glossify(name)} ×${n}</span>`).join('');
   el.innerHTML = `
     <div class="top-row">
       <div>
-        <div class="label">${input.label}</div>
+        <div class="label">${LABEL_OVERRIDE[input.id] || input.label}</div>
         <div class="sense">${SENSE[input.id] || ''}</div>
       </div>
-      <div class="src">${input.source_name}</div>
     </div>
     <canvas data-id="${input.id}"></canvas>
     <div class="nums"><b>${input.n_source}</b><span class="arrow">→</span><span class="aval">${input.n_downstream}</span> neurones en aval</div>
     <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-    <div class="tags">${tags}</div>`;
+    ${tags ? `<div class="tags">${tags}</div>` : ''}`;
   return el;
 }
 
@@ -253,6 +276,15 @@ function drawAll(background, bounds, inputs){
       const [px,py] = T(x,y);
       ctx.fillRect(px-0.6,py-0.6,1.6,1.6);
     }
+
+    // repères G/D = côtés de la MOUCHE : vue de face, sa gauche (œil gauche, x>0) tombe à droite de l'écran
+    ctx.font = '600 11px "Segoe UI",system-ui,sans-serif';
+    ctx.fillStyle = 'rgba(220,228,240,.45)';
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'left';
+    ctx.fillText('D', 5, h-4);
+    ctx.textAlign = 'right';
+    ctx.fillText('G', w-5, h-4);
   });
 }
 </script>
