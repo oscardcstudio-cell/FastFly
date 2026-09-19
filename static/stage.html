@@ -137,9 +137,7 @@ function drawConnHist(canvas) {
 // ---- Looming test (Oscar, 2026-09-19): the waveform as an object flying at each eye, and the mouche's dodge readout ----
 // One display, icon-toggled, off by default: it must never disturb the live /stage view.
 let loomOn = localStorage.flyLoom === '1';
-const loomPulses = []; // {side:'L'|'R', t0, mag}
-const loomLast = { L: 0, R: 0 }, loomCooldown = { L: 0, R: 0 };
-const LOOM_DUR = 500, LOOM_COOLDOWN = 90, LOOM_GATE = 0.12;
+const LOOM_DUR = 1400; // ms from the horizon to the eye
 let dodgeGroups = { left: 0, right: 0, escape: 0 };
 const dodgeFlash = { left: 0, right: 0, escape: 0 };
 function setLoom(on) {
@@ -147,13 +145,12 @@ function setLoom(on) {
   document.getElementById('loomBtn').classList.toggle('on', on);
   document.getElementById('loom').classList.toggle('on', on);
 }
-function onLoomLevel(side, v) {
-  const now = performance.now();
-  if (v > LOOM_GATE && v > loomLast[side] && now - loomCooldown[side] > LOOM_COOLDOWN) {
-    loomPulses.push({ side, t0: now, mag: v });
-    loomCooldown[side] = now;
-  }
-  loomLast[side] = v;
+// the waveform itself: every level the eye received, stamped, so it can fly from the horizon to the viewer
+const loomWave = { L: [], R: [] };
+function onLoomLevel(side, v, a) { // v = impulse sent to the eye (onset), a = loudness: the waveform itself
+  const now = performance.now(), q = loomWave[side];
+  q.push({ t0: now, v, a });
+  while (q.length && now - q[0].t0 > LOOM_DUR) q.shift();
 }
 function onDodge(d) { for (const k of ['left', 'right', 'escape']) if (d[k] > 0) dodgeFlash[k] = performance.now(); }
 function drawLoom(canvas) {
@@ -173,15 +170,19 @@ function drawLoom(canvas) {
       c.beginPath(); c.moveTo(cx + dx * w * 0.15, cy + dy * tunH * 0.42); c.lineTo(cx, cy); c.stroke();
     }
   });
-  for (let k = loomPulses.length - 1; k >= 0; k--) {
-    const p = loomPulses[k], age = now - p.t0;
-    if (age > LOOM_DUR) { loomPulses.splice(k, 1); continue; }
-    const t = age / LOOM_DUR; // 0 = just arrived (far), 1 = at the eye
-    const cx = w * (p.side === 'L' ? 0.24 : 0.76), cy = tunH / 2;
-    const r = 2 + t * t * Math.min(w, tunH) * 0.28 * (0.4 + 0.6 * p.mag); // grows in as it approaches, not linearly: a looming object accelerates in apparent size
-    c.beginPath(); c.arc(cx, cy, r, 0, 7);
-    c.fillStyle = `rgba(255,${Math.round(210 - t * 120)},${Math.round(Math.max(0, 90 - t * 90))},${(1 - t) * 0.8})`;
-    c.fill();
+  // each received level is a ring flying out of the vanishing point toward the viewer: the waveform arrives
+  // head-on. Perspective: size ~ 1/distance, so rings crawl far away and rush in close. A peak = a thick bright ring.
+  for (const [side, fx] of [['L', 0.24], ['R', 0.76]]) {
+    const cx = w * fx, cy = tunH / 2, big = Math.min(w * 0.26, tunH * 0.5);
+    for (const p of loomWave[side]) {
+      const t = Math.min(1, (now - p.t0) / LOOM_DUR), r = big * 0.06 / (1.06 - t);
+      c.beginPath(); c.arc(cx, cy, Math.min(r, big * 1.4), 0, 7);
+      // the waveform: a pale ring as wide as the sound is loud; an impulse the eye actually got: thick, hot
+      const fade = Math.min(1, t * 4);
+      if (p.v > 0.1) { c.lineWidth = 1 + p.v * (2 + t * 8); c.strokeStyle = `rgba(255,${Math.round(190 - p.v * 130)},60,${fade})`; }
+      else { c.lineWidth = 0.5 + p.a * 2.5; c.strokeStyle = `rgba(150,200,230,${(0.2 + 0.6 * p.a) * fade})`; }
+      c.stroke();
+    }
   }
   // dodge readout: turn-left / escape / turn-right. Dim + crossed out = these neurons don't exist in this connectome (honest, not zero).
   const ly = h - 13, lx = [w * 0.22, w * 0.5, w * 0.78];
@@ -409,7 +410,7 @@ function connect() {
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
     }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
-    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; if ('LOOM_L' in m.levels) onLoomLevel('L', m.levels.LOOM_L); if ('LOOM_R' in m.levels) onLoomLevel('R', m.levels.LOOM_R); }
+    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; if ('LOOM_L' in m.levels) onLoomLevel('L', m.levels.LOOM_L, m.levels['JO-E'] || 0); if ('LOOM_R' in m.levels) onLoomLevel('R', m.levels.LOOM_R, m.levels['JO-E'] || 0); }
     if (m.type === 'beatgrid_state') {
       const st = m.state, el = document.getElementById('bgstate');
       el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;
