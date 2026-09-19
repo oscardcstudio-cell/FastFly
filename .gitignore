@@ -22,3 +22,4 @@ nul
 fly.log
 tunnel.log
 fly_relaunch_*.log
+mouche.log
