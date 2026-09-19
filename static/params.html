@@ -49,7 +49,7 @@ fetch('/api/params').then(r => r.json()).then(now => {
 // One button per sense: lights when the sequencer fires it, click fires it by hand
 const senseBtn = {};
 const flash = name => { const b = senseBtn[name]; if (!b) return; b.classList.add('on'); setTimeout(() => b.classList.remove('on'), 150); };
-fetch('/api/senses').then(r => r.json()).then(list => list.forEach(s => {
+fetch('/api/senses').then(r => r.json()).then(list => list.filter(s => s.taps[0].amplitude != null).forEach(s => { // the ear has no tap: it hears the music
   const cell = document.createElement('div');
   cell.innerHTML = `<span>${s.label}<small>${s.when}</small></span>`;
   s.taps.forEach((t, i) => {

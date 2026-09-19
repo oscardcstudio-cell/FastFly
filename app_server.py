@@ -121,11 +121,33 @@ async def get_params():
                          "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp)})
 
 
+def _anchors(idx):
+    """One real neuron per side of the brain, the closest to where this group sits: where /stage points its label.
+    A side holding under a fifth of the group is ignored (a stray cell is not a zone)."""
+    import numpy as np
+    pos = engine._positions
+    if pos is None or not len(idx):
+        return []
+    idx = np.asarray(idx, dtype=np.int64)
+    left = pos[idx, 0] < (pos[:, 0].min() + pos[:, 0].max()) / 2
+    out = []
+    for side in (idx[left], idx[~left]):
+        if len(side) >= len(idx) / 5:
+            out.append(int(side[np.argmin(((pos[side] - pos[side].mean(0)) ** 2).sum(1))]))
+    return out
+
+
 @app.get("/api/senses")
 async def get_senses():
-    """The sequencer-to-sense table, so /params can show each sense and fire it by hand."""
+    """The sequencer-to-sense table with where each sense enters the brain, for /params, /stage and the dashboard."""
     from beatgrid_bridge import senses_table
-    return JSONResponse(senses_table())
+    table = senses_table()
+    for sense in table:
+        for tap in sense["taps"]:
+            tap["anchors"] = _anchors(engine._stimuli.get(tap["name"], []))
+    ear = [i for v in engine._audio.values() for i in v[0].get().tolist()]
+    table.append({"label": "oreille", "when": "son", "taps": [{"name": "ear", "anchors": _anchors(ear)}]})
+    return JSONResponse(table)
 
 
 @app.get("/api/positions")
@@ -238,7 +260,8 @@ async def websocket_endpoint(ws: WebSocket):
                 engine.reset_state()
 
             elif cmd == "tap":
-                engine.tap(msg.get("name", ""), float(msg.get("amplitude", 0.5)), int(msg.get("steps", 150)))
+                if engine.tap(msg.get("name", ""), float(msg.get("amplitude", 0.5)), int(msg.get("steps", 150))):
+                    await broadcast({"type": "beatgrid", "event": "manual", "sense": msg.get("name")})  # every page shows a sense fired by hand too
 
             elif cmd == "clear_stimulus":
                 engine.clear_stimulus()

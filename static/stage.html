@@ -173,7 +173,7 @@ function connect() {
     if (m.type === 'beatgrid') {
       if (parent !== window) parent.postMessage({ source: 'fly', type: 'tap', sense: m.sense, event: m.event }, '*');
       const FR = { 'Temperature change': 'chaleur', 'Humidity change': 'humidité', 'Light (left eye)': 'œil gauche', 'Light (right eye)': 'œil droit', 'Sugar (proboscis)': 'sucre', 'Odor (both antennae)': 'odeur', 'Touch (left leg/body)': 'toucher gauche', 'Touch (right leg/body)': 'toucher droit', 'Tickle (left antenna)': 'vent antenne gauche', 'Tickle (right antenna)': 'vent antenne droite' };
-      const LBL = { pattern: 'loop', drop: 'DROP', break: 'BREAK', suspension: 'SUSPENSION' };
+      const LBL = { manual: 'main', pattern: 'loop', drop: 'DROP', break: 'BREAK', suspension: 'SUSPENSION' };
       // drops and breaks get their own line: loop changes are frequent and would push them out of the log
       if (m.event !== 'pattern') document.getElementById('bgsec').textContent = `${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense} · ${new Date().toLocaleTimeString()}`;
       bgLog.unshift(`${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense}`); bgLog.length = Math.min(bgLog.length, 5);
