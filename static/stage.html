@@ -254,6 +254,8 @@ function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   const send = o => ws.send(JSON.stringify(o));
   ws.onopen = () => {
+    // ?watch: look without touching. One engine is shared by every page, and a second /stage would reset the brain mid-set
+    if (new URLSearchParams(location.search).has('watch')) return;
     // quiet at rest: little noise, synapses just below the self-sustaining point
     send({ cmd: 'set_param', key: 'noise_amp', value: 0.15 });
     send({ cmd: 'set_param', key: 'weight_gain', value: +document.getElementById('react').value });
