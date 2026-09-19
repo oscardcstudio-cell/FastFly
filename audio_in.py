@@ -66,19 +66,17 @@ def spectrum(mag, samplerate):
 def start(on_levels):
     """Calls on_levels({group: 0..1, 'HEAT':, 'COLD':}, [32 band levels]) ~23 times/s from the audio thread. Returns a stop function."""
     import pyaudiowpatch as pa
-    audio = pa.PyAudio()
-    api = audio.get_host_api_info_by_type(pa.paWASAPI)
-    speakers = audio.get_device_info_by_index(api["defaultOutputDevice"])
-    device = next(d for d in audio.get_loopback_device_info_generator() if speakers["name"] in d["name"])
-    sr, ch = int(device["defaultSampleRate"]), int(device["maxInputChannels"])
     window = np.blackman(N).astype(np.float32)
     smooth = np.zeros(N // 2 + 1, dtype=np.float32)
     weather = Climate()
     # WASAPI loopback sends nothing at all while the computer is silent: without this the ear would stay stuck on its last level
     last = [time.monotonic()]
 
+    now = {}  # the PyAudio, stream and device being listened to: replaced when Windows' default output changes
+
     def callback(data, frames, time_info, status):
-        x = np.frombuffer(data, dtype=np.float32).reshape(-1, ch).mean(1)[-N:]
+        sr = now["sr"]
+        x = np.frombuffer(data, dtype=np.float32).reshape(-1, now["ch"]).mean(1)[-N:]
         if len(x) == N:
             mag = np.abs(np.fft.rfft(x * window)) / N  # the browser analyser's scaling, so both routes read the same level
             smooth[:] = 0.6 * smooth + 0.4 * mag  # same smoothing as the browser analyser
@@ -88,20 +86,48 @@ def start(on_levels):
             on_levels(levels, spectrum(smooth, sr))
         return (None, pa.paContinue)
 
-    stream = audio.open(format=pa.paFloat32, channels=ch, rate=sr, frames_per_buffer=N, input=True,
-                        input_device_index=device["index"], stream_callback=callback)
+    def default_output(audio):
+        return audio.get_device_info_by_index(audio.get_host_api_info_by_type(pa.paWASAPI)["defaultOutputDevice"])["name"]
+
+    def listen():
+        audio = pa.PyAudio()  # a fresh one each time: PortAudio reads the device list once, at init
+        name = default_output(audio)
+        device = next(d for d in audio.get_loopback_device_info_generator() if name in d["name"])
+        now.update(audio=audio, name=name, sr=int(device["defaultSampleRate"]), ch=int(device["maxInputChannels"]))
+        now["stream"] = audio.open(format=pa.paFloat32, channels=now["ch"], rate=now["sr"], frames_per_buffer=N, input=True,
+                                   input_device_index=device["index"], stream_callback=callback)
+        print(f"audio in: {device['name']} @ {now['sr']} Hz", flush=True)
+
+    def close():
+        try:
+            now["stream"].close(); now["audio"].terminate()
+        except Exception:
+            pass  # a device that vanished may refuse to close: the next listen() starts clean anyway
+        now["name"] = None  # so a failed listen() is tried again at the next look
+
+    listen()
     alive = threading.Event()
 
     def watchdog():
+        checked = time.monotonic()
         while not alive.wait(0.2):
             if time.monotonic() - last[0] > 0.3:
                 smooth[:] = 0
                 on_levels({k: 0.0 for k in [*BANDS, "HEAT", "COLD"]}, [0.0] * 32)
+            # Headphones plugged in mid-set: Windows moves the sound, the fly kept listening to the silent speakers
+            # (Oscar, 2026-09-19). Only looked at during silence, every 3 s: a playing output is the right one.
+            if time.monotonic() - last[0] > 3 and time.monotonic() - checked > 3:
+                checked = time.monotonic()
+                try:
+                    probe = pa.PyAudio(); name = default_output(probe); probe.terminate()
+                    if name != now["name"]:
+                        close(); listen()
+                except Exception as e:
+                    print(f"audio in: {e}", flush=True)
     threading.Thread(target=watchdog, daemon=True).start()
-    print(f"audio in: {device['name']} @ {sr} Hz", flush=True)
 
     def stop():
-        alive.set(); stream.close(); audio.terminate()
+        alive.set(); close()
     return stop
 
 
