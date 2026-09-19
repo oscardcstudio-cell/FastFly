@@ -95,7 +95,7 @@ async def start_beatgrid_bridge():
             asyncio.create_task(broadcast({"type": "beatgrid", "event": event, "sense": name}))
         if not args.replay:
             def on_state(st):
-                if st.get("bpm"):  # the fly counts its kicks in beats: it needs the length of one
+                if st.get("bpm"):  # the fly reads its bars in beats: it needs the length of one
                     fly_says.period = 60 / st["bpm"]
                 asyncio.create_task(broadcast({"type": "beatgrid_state", "state": st}))
             asyncio.create_task(watch_state(args.beatgrid_url + "/etat", on_state, on_tap))
@@ -131,7 +131,7 @@ engine.set_weight_gain(weight_gain)  # calm at rest from the start, before any p
 async def get_params():
     """Current knobs, so the settings window opens on the real values."""
     return JSONResponse({"audio_gain": audio_gain, "weight_gain": weight_gain,
-                         "kick_pulse": fly_says.pulse, "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
+                         "fly_step": fly_says.step, "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
                          "heat_gain": climate_gain["HEAT"], "cold_gain": climate_gain["COLD"]})
 
 
@@ -297,8 +297,8 @@ async def websocket_endpoint(ws: WebSocket):
                     audio_gain = max(0.0, min(4.0, float(value)))
                 elif key in ("heat_gain", "cold_gain"):
                     climate_gain[key[:4].upper()] = max(0.0, min(1.5, float(value)))
-                elif key == "kick_pulse":
-                    fly_says.pulse = max(0.01, min(0.3, float(value)))
+                elif key == "fly_step":
+                    fly_says.step = max(0.5, min(12.0, float(value)))
                 elif key == "audio_mute":
                     engine.audio_mute = bool(value)
                 elif key == "weight_gain":

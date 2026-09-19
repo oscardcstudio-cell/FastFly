@@ -5,65 +5,76 @@ fired during a batch. Measured offline (noise 0.15, gain 0.8, fatigue 0.3):
     kick at 128 BPM   swings 0.09 <-> 0.23 about once a beat
     pads, no kick     flat around 0.09        sub bass, no kick   flat around 0.125
     silence           0
-So a kick is not a LEVEL (a sub bass is as loud for these neurons), it is a PULSE: the readout
-jumping above its recent floor. The rule is Oscar's (2026-09-19), counted in BEATS, not bars:
-    two kicks in a row  -> drop          two beats with no kick -> break
-The beat length comes from the beatgrid dashboard's BPM when it is there (app_server sets .period).
-Thresholds are calibration knobs: real tracks will need tuning by ear.
+Counting kicks beat by beat flipped break/drop every two bars (92 flips over 454 bars, 2026-09-19):
+Oscar's verdict, « tu passe de break à drop toutes les 2 mesures c'est n'importe quoi ». So the
+fly now reads the same thing as the beatgrid dashboard (sections.DetecteurEnergie): the STEP.
+Each bar (4 beats, beat length from the dashboard's BPM) gets the mean of the readout; it is
+compared to the four bars before. The bass circuit falls at once entering a break and jumps back
+at the drop, while it barely moves inside a section.
     python fly_says.py      # self-check
 """
-import collections, time
+import collections, math, time
 
-WINDOW = 9          # batches, about one second: where the floor is read
-PULSE = 0.06        # a jump this far above the floor = the bass circuit just took a kick (the pages' « Seuil kick » fader)
+STEP_DB = 2.5       # a bar this far (dB) from the four before = the section changed (the pages' « Seuil marche » fader)
+BARS_BEFORE = 4     # what a bar is compared to
+BEATS_A_BAR = 4
 SOUND_FLOOR = 0.01  # under this mean activity there is nothing to say
-IN_A_ROW = 1.5      # beats: a kick this close to the last one is "d'affilée"
-MISSING = 2.5       # beats since the last kick: the two next ones did not come
+LEVEL_WINDOW = 9    # batches, about one second: only for the pulse gauge on the pages
 DEFAULT_PERIOD = 60 / 128  # ponytail: used only without beatgrid; half-time tracks keep the last word
 
 
 class FlySays:
     def __init__(self):
-        self.window = collections.deque(maxlen=WINDOW)
-        self.verdict, self.period, self.pulse = None, DEFAULT_PERIOD, PULSE
-        self._high, self._last_kick, self._run = False, None, 0
+        self.window = collections.deque(maxlen=LEVEL_WINDOW)
+        self.verdict, self.period, self.step = None, DEFAULT_PERIOD, STEP_DB
+        self._bars = collections.deque(maxlen=BARS_BEFORE)
+        self._bar_start, self._sum, self._n = None, 0.0, 0
 
     def push(self, readout, now=None):
         now = time.monotonic() if now is None else now
         self.window.append(readout)
+        if self._bar_start is None:
+            self._bar_start = now
+        if now - self._bar_start >= BEATS_A_BAR * self.period:
+            self._close_bar()
+            self._bar_start = now
+        self._sum += readout
+        self._n += 1
         w = self.window
-        floor, mean = min(w), sum(w) / len(w)
-        high = readout - floor > self.pulse
-        if high and not self._high:  # rising edge: one kick, however many batches it lasts
-            near = self._last_kick is not None and now - self._last_kick < IN_A_ROW * self.period
-            self._run, self._last_kick = (self._run + 1 if near else 1), now
-            if self._run >= 2: self.verdict = "drop"
-        self._high = high
-        if len(w) == WINDOW:
-            if mean < SOUND_FLOOR: self.verdict, self._run = None, 0
-            elif self._last_kick is None or now - self._last_kick > MISSING * self.period:
-                self.verdict, self._run = "break", 0
-        return {"verdict": self.verdict, "level": round(min(1.0, (max(w) - floor) / 0.15), 3)}
+        return {"verdict": self.verdict, "level": round(min(1.0, (max(w) - min(w)) / 0.15), 3)}
+
+    def _close_bar(self):
+        level = self._sum / self._n if self._n else 0.0
+        self._sum, self._n = 0.0, 0
+        if level < SOUND_FLOOR:
+            self.verdict = None
+            self._bars.clear()
+            return
+        if len(self._bars) == BARS_BEFORE:
+            gap = 20 * math.log10(level / (sum(self._bars) / BARS_BEFORE))
+            if gap <= -self.step: self.verdict = "break"
+            elif gap >= self.step: self.verdict = "drop"
+        self._bars.append(level)
 
 
 if __name__ == "__main__":
     f, clock = FlySays(), [0.0]
-    dt = f.period / 4  # four batches a beat
+    f.period = 0.5
+    dt = f.period / 4  # four batches a beat, sixteen a bar
 
-    def say(seq):
-        for x in seq:
-            clock[0] += dt
-            out = f.push(x, clock[0])
+    KICK, MUTE, SILENT = [0.23, 0.11, 0.10, 0.10] * 4, [0.09, 0.10, 0.08, 0.09] * 4, [0.0] * 16
+
+    def bars(n, bar):
+        for _ in range(n):
+            for x in bar:
+                clock[0] += dt
+                out = f.push(x, clock[0])
         return out["verdict"]
-    kick, mute = [0.23, 0.11, 0.10, 0.10], [0.09, 0.10, 0.08, 0.09]
-    say(mute)
-    assert say(kick) != "drop"                                # one kick is not a drop yet
-    assert say(kick) == "drop"                                # two in a row: drop, on the second
-    assert say(kick * 4) == "drop"
-    assert say(mute) == "drop"                                # one kick missing: not yet
-    assert say(mute) == "break"                               # the second one did not come either
-    assert say(kick) == "break" and say(mute) == "break"      # a lone kick does not make a drop
-    assert say(kick * 2) == "drop"
-    assert say([0.125, 0.11, 0.14, 0.12] * 4) == "break"      # a sub bass without kick is still a break
-    assert say([0.0] * 9) is None
+    assert bars(6, KICK) is None                   # no step yet: nothing to say
+    assert bars(1, MUTE) is None                   # the bar that falls is still being counted
+    assert bars(1, MUTE) == "break"                # it closed: break, one bar late
+    assert bars(6, MUTE) == "break"                # the break holds, bar after bar
+    assert bars(2, KICK) == "drop"                 # the kick comes back: drop
+    assert {bars(1, KICK) for _ in range(16)} == {"drop"}  # and holds: no flip every two bars
+    assert bars(2, SILENT) is None                 # silence: nothing to say
     print("fly_says ok")

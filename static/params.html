@@ -32,7 +32,7 @@
 // One row per engine knob: [key sent to the server, label, min, max, step]
 const KNOBS = [
   ['audio_gain', 'Gain son', 0, 4, 0.05],
-  ['kick_pulse', 'Seuil kick', 0.02, 0.15, 0.01], // fly_says: how far the bass neurons must jump to count as a kick
+  ['fly_step', 'Seuil marche', 0.5, 8, 0.5], // fly_says: how far (dB) a bar of the bass neurons must move from the 4 before to change section
   ['weight_gain', 'Réactivité', 0.5, 1, 0.01],
   ['adapt', 'Fatigue', 0, 1, 0.05],
   ['noise_amp', 'Bruit de fond', 0, 0.5, 0.01],
