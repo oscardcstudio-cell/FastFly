@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fly Stage</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -16,10 +17,22 @@
   .meter { flex: 1; height: 6px; background: #112; }
   .meter i { display: block; height: 100%; width: 0; background: #3cf; }
   .lbl { width: 42px; }
+  #close { position: absolute; top: 6px; right: 6px; padding: 2px 8px; }
+  #open { display: none; position: fixed; top: 12px; left: 12px; font: inherit; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; }
+  /* touch screens have no H key: a button brings the panel back, and everything gets finger-sized */
+  @media (pointer: coarse) {
+    #panel { font-size: 15px; right: 12px; gap: 12px; padding-top: 40px; }
+    #panel input[type=range] { flex: 1; height: 32px; }
+    #panel select, #panel button { padding: 10px 12px; }
+    .lbl { width: 60px; }
+    #hkey { display: none; }
+    #panel.hidden + #open { display: block; }
+  }
 </style>
 </head>
 <body>
 <div id="panel">
+  <button id="close" aria-label="fermer">✕</button>
   <div class="row"><select id="dev"><option value="">Entrée audio...</option></select></div>
   <div class="row"><button id="sys">Son système (partage)</button><button id="demo">Démo 120 BPM</button></div>
   <div class="row"><span class="lbl">Gain</span><input type="range" id="gain" min="0" max="4" step="0.05" value="1"></div>
@@ -31,8 +44,9 @@
   <div id="bgstate"></div>
   <div id="bgsec" style="color:#fff;font-weight:600"></div>
   <div id="bg"></div>
-  <div style="opacity:.6">H : masquer ce panneau</div>
+  <div id="hkey" style="opacity:.6">H : masquer ce panneau</div>
 </div>
+<button id="open" aria-label="réglages">☰</button>
 <script>
 // Artistic mapping, not physiology: bass -> JO-B, mids -> JO-A, highs -> JO-C, loudness -> JO-E
 const BANDS = [
@@ -244,7 +258,8 @@ document.getElementById('react').oninput = e => ws.send(JSON.stringify({ cmd: 's
 addEventListener('message', e => { if (e.data && e.data.source === 'dashboard' && e.data.cmd === 'toggle-params') document.getElementById('panel').classList.toggle('hidden'); });
 document.getElementById('adapt').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'adapt', value: +e.target.value }));
 // ?embed : the brain alone, as a panel inside the beatgrid dashboard (which has its own readouts)
-if (new URLSearchParams(location.search).has('embed')) document.getElementById('panel').classList.add('hidden');
+if (new URLSearchParams(location.search).has('embed')) { document.getElementById('panel').classList.add('hidden'); document.getElementById('open').remove(); }
+for (const id of ['close', 'open']) if (document.getElementById(id)) document.getElementById(id).onclick = () => document.getElementById('panel').classList.toggle('hidden');
 addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); });
 </script>
 </body>
