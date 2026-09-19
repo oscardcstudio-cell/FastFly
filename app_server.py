@@ -41,13 +41,13 @@ static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 sim_running = False
-batch_size = 200
+batch_size = 50  # the ear's level and the fly's reading change once a batch: 200 was two a second under load, slower than the beat (measured 2026-09-19)
 fly_says = FlySays()
 mic_weather = Climate()
 clients: list[WebSocket] = []
 
 
-audio_gain = 1.0
+audio_gain = 1.5  # 1.0 only lit the brain on the big kicks (Oscar, 2026-09-19); the pages' fader goes to 4
 climate_gain = {"HEAT": 0.5, "COLD": 0.5}  # how hard the sound's warmth and coldness push their sense (the pages' faders)
 audio_levels = {}
 audio_spectrum = []
@@ -94,8 +94,11 @@ async def start_beatgrid_bridge():
             # the pages show it, so Oscar can check what the fly was told against what he hears
             asyncio.create_task(broadcast({"type": "beatgrid", "event": event, "sense": name}))
         if not args.replay:
-            asyncio.create_task(watch_state(args.beatgrid_url + "/etat",
-                                            lambda st: asyncio.create_task(broadcast({"type": "beatgrid_state", "state": st})), on_tap))
+            def on_state(st):
+                if st.get("bpm"):  # the fly counts its kicks in beats: it needs the length of one
+                    fly_says.period = 60 / st["bpm"]
+                asyncio.create_task(broadcast({"type": "beatgrid_state", "state": st}))
+            asyncio.create_task(watch_state(args.beatgrid_url + "/etat", on_state, on_tap))
         asyncio.create_task(replay(args.replay, args.beatgrid, on_tap) if args.replay
                             else follow(args.beatgrid, on_tap))
 
@@ -128,7 +131,7 @@ engine.set_weight_gain(weight_gain)  # calm at rest from the start, before any p
 async def get_params():
     """Current knobs, so the settings window opens on the real values."""
     return JSONResponse({"audio_gain": audio_gain, "weight_gain": weight_gain,
-                         "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
+                         "kick_pulse": fly_says.pulse, "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
                          "heat_gain": climate_gain["HEAT"], "cold_gain": climate_gain["COLD"]})
 
 
@@ -294,6 +297,8 @@ async def websocket_endpoint(ws: WebSocket):
                     audio_gain = max(0.0, min(4.0, float(value)))
                 elif key in ("heat_gain", "cold_gain"):
                     climate_gain[key[:4].upper()] = max(0.0, min(1.5, float(value)))
+                elif key == "kick_pulse":
+                    fly_says.pulse = max(0.01, min(0.3, float(value)))
                 elif key == "audio_mute":
                     engine.audio_mute = bool(value)
                 elif key == "weight_gain":
