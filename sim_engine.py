@@ -216,6 +216,10 @@ class SimEngine:
             hit = np.unique(np.concatenate([tg[off[i]:off[i + 1]] for i in self._audio["JO-B"][0].get()]))
             self._bass_readout = cp.asarray(np.setdiff1d(hit, ear))
             print(f"  bass readout: {len(self._bass_readout)} neurons")
+        # The climate of the sound (audio_in.Climate) drives two senses all the time, like the ear: same channel, other neurons.
+        for channel, stim in (("HEAT", "Temperature change"), ("COLD", "Humidity change")):
+            if stim in self._stimuli:
+                self._audio[channel] = [cp.asarray(self._stimuli[stim].astype(np.int64)), 0.0]
 
     def set_audio(self, amps):
         """amps: {group: amplitude}, e.g. {'JO-A': 0.8}. Unknown groups ignored."""
@@ -224,7 +228,7 @@ class SimEngine:
                 self._audio[name][1] = max(0.0, min(5.0, float(amp)))
 
     def get_audio_groups(self):
-        return {k: int(len(v[0])) for k, v in self._audio.items()}
+        return {k: int(len(v[0])) for k, v in self._audio.items() if k.startswith("JO-")}
 
     def _setup_fallback_groups(self):
         """Fallback: equal-size index-range groups."""

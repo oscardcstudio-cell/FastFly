@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from sim_engine import SimEngine
 from fly_says import FlySays
+from audio_in import Climate
 
 parser = argparse.ArgumentParser(description="FlyWire Simulator Web Server")
 parser.add_argument("--data", help="Binary connectome file")
@@ -42,11 +43,19 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 sim_running = False
 batch_size = 200
 fly_says = FlySays()
+mic_weather = Climate()
 clients: list[WebSocket] = []
 
 
 audio_gain = 1.0
+climate_gain = {"HEAT": 0.5, "COLD": 0.5}  # how hard the sound's warmth and coldness push their sense (the pages' faders)
 audio_levels = {}
+audio_spectrum = []
+
+
+def hear(levels):
+    """Band and climate levels 0..1 -> the engine, each with its own gain."""
+    engine.set_audio({k: v * climate_gain.get(k, audio_gain) for k, v in levels.items()})
 
 
 @app.on_event("startup")
@@ -55,14 +64,15 @@ async def start_audio_in():
         return
     import audio_in
 
-    def on_levels(levels):  # audio thread: set_audio only stores floats
+    def on_levels(levels, spectrum):  # audio thread: set_audio only stores floats
         audio_levels.update(levels)
-        engine.set_audio({k: v * audio_gain for k, v in levels.items()})
+        audio_spectrum[:] = spectrum
+        hear(levels)
     app.state.audio_stop = audio_in.start(on_levels)  # keep it: a dropped stream is garbage-collected and goes silent
 
     async def show():  # the pages' meters, so Oscar sees the sound arrive
         while True:
-            await broadcast({"type": "audio_levels", "levels": audio_levels})
+            await broadcast({"type": "audio_levels", "levels": audio_levels, "spectrum": audio_spectrum})
             await asyncio.sleep(0.1)
     asyncio.create_task(show())
 
@@ -118,7 +128,8 @@ engine.set_weight_gain(weight_gain)  # calm at rest from the start, before any p
 async def get_params():
     """Current knobs, so the settings window opens on the real values."""
     return JSONResponse({"audio_gain": audio_gain, "weight_gain": weight_gain,
-                         "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp)})
+                         "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
+                         "heat_gain": climate_gain["HEAT"], "cold_gain": climate_gain["COLD"]})
 
 
 def _anchors(idx):
@@ -145,7 +156,7 @@ async def get_senses():
     for sense in table:
         for tap in sense["taps"]:
             tap["anchors"] = _anchors(engine._stimuli.get(tap["name"], []))
-    ear = [i for v in engine._audio.values() for i in v[0].get().tolist()]
+    ear = [i for k, v in engine._audio.items() if k.startswith("JO-") for i in v[0].get().tolist()]
     table.append({"label": "oreille", "when": "son", "taps": [{"name": "ear", "anchors": _anchors(ear)}]})
     return JSONResponse(table)
 
@@ -255,6 +266,10 @@ async def websocket_endpoint(ws: WebSocket):
 
             elif cmd == "audio":
                 engine.set_audio(msg.get("amps", {}))
+                if "climate" in msg:  # a page listening through a microphone sends its two shares: same reading as the loopback
+                    levels = mic_weather.push(*(float(v) for v in msg["climate"][:3]))
+                    hear(levels)
+                    await broadcast({"type": "audio_levels", "levels": levels})
 
             elif cmd == "reset":
                 engine.reset_state()
@@ -277,6 +292,8 @@ async def websocket_endpoint(ws: WebSocket):
                     engine.set_adapt(float(value))
                 elif key == "audio_gain":
                     audio_gain = max(0.0, min(4.0, float(value)))
+                elif key in ("heat_gain", "cold_gain"):
+                    climate_gain[key[:4].upper()] = max(0.0, min(1.5, float(value)))
                 elif key == "audio_mute":
                     engine.audio_mute = bool(value)
                 elif key == "weight_gain":

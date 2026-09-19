@@ -7,17 +7,21 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="/static/edges.js"></script>
+<script src="/static/eq.js"></script>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 12px system-ui, sans-serif; color: #9ab; }
   canvas { display: block; }
-  #panel { position: fixed; top: 12px; left: 12px; background: rgba(0,0,0,.7); padding: 10px 12px; border: 1px solid #234; border-radius: 6px; display: grid; gap: 6px; min-width: 260px; }
+  #panel { position: fixed; top: 12px; left: 12px; background: rgba(0,0,0,.88); padding: 10px 12px; border: 1px solid #234; border-radius: 6px; display: grid; gap: 6px; min-width: 260px; }
   #panel.hidden { display: none; }
+  #panel, #open { z-index: 2; } /* above the annotation canvas: its labels must never write over the panel */
   #panel select { max-width: 260px; } /* a long device name must not stretch the whole panel */
   #panel select, #panel button { font: inherit; background: #0b1520; color: #cde; border: 1px solid #345; padding: 4px 6px; border-radius: 4px; }
   .row { display: flex; gap: 6px; align-items: center; }
   .meter { flex: 1; height: 6px; background: #112; }
   .meter i { display: block; height: 100%; width: 0; background: #3cf; }
   .lbl { width: 42px; }
+  #eq { width: 100%; height: 56px; display: block; background: #060c14; }
+  #m-HEAT { background: #ff7a3c; } #m-COLD { background: #9fdcff; }
   #panel #close { position: absolute; top: 6px; right: 6px; padding: 2px 9px; background: #ff2d95; border-color: #ff2d95; color: #fff; font-weight: 700; font-size: 1.15em; }
   #open { display: none; position: fixed; top: 12px; left: 12px; font: inherit; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; }
   #annot { position: fixed; inset: 0; pointer-events: none; display: none; }
@@ -42,6 +46,9 @@
   <div class="row"><span class="lbl">Gain</span><input type="range" id="gain" min="0" max="4" step="0.05" value="1"></div>
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div id="meters"></div>
+  <canvas id="eq"></canvas>
+  <div class="row"><span class="lbl">Chaleur</span><div class="meter"><i id="m-HEAT"></i></div><input type="range" id="heat_gain" min="0" max="1.5" step="0.05" value="0.5"></div>
+  <div class="row"><span class="lbl">Froid</span><div class="meter"><i id="m-COLD"></i></div><input type="range" id="cold_gain" min="0" max="1.5" step="0.05" value="0.5"></div>
   <div id="info">Connexion...</div>
   <div class="row"><span class="lbl">Fatigue</span><input type="range" id="adapt" min="0" max="1" step="0.05" value="0.3"></div>
   <div id="flysays"></div>
@@ -71,6 +78,8 @@ const REST_COLOR = '#9ab8c4';
 const FLASH_MS = 1800;
 const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 let ANN = [], sensesData = null, earLevel = 0, earLevelTarget = 0, hoveredAnn = null;
+const CLIMATE = { 'Temperature change': ['HEAT', '#ff7a3c'], 'Humidity change': ['COLD', '#9fdcff'] }, climate = { HEAT: 0, COLD: 0 }; // senses the sound drives all the time
+let eqSpectrum = [], ownEQ = false;
 const senseFlash = {}, tapToSense = {};
 let annotOn = localStorage.flyAnnot !== '0'; // on unless switched off on this browser (I key or panel button): the Resolume capture turns it off once
 const ann = document.getElementById('annot'), actx2 = ann.getContext('2d');
@@ -93,7 +102,7 @@ function buildAnnots() {
     let first = true;
     s.taps.forEach(t => (t.anchors || []).forEach(a => {
       if (a >= N) return;
-      const item = { si, anchor: a, label: s.label, when: s.when, primary: first, isEar: s.label === 'oreille', hoverTxt: `${s.label} · ${s.when}` };
+      const item = { climate: CLIMATE[t.name], si, anchor: a, label: s.label, when: s.when, primary: first, isEar: s.label === 'oreille', hoverTxt: `${s.label} · ${s.when}` };
       first = false;
       (pos[a * 3] < 0 ? left : right).push(item);
     }));
@@ -127,6 +136,7 @@ function drawAnnots() {
         if (a.primary) { txt = fl.txt; txtA = p; }
       }
     }
+    if (a.climate && climate[a.climate[0]] > 0.05 && color === REST_COLOR) { const v = climate[a.climate[0]]; color = a.climate[1]; dotA = 0.35 + 0.6 * v; lineA = 0.15 + 0.6 * v; }
     if (a === hoveredAnn || (a.tapUntil && now < a.tapUntil)) {
       dotA = 1; lineA = 0.85; if (!txt) { txt = a.hoverTxt; txtA = 1; }
     }
@@ -234,7 +244,7 @@ function drawGlow() {
 
 // a batch lands as ~40 frames at once: spread them over the next screen frames instead of one flash
 function playFrames() { for (let k = Math.ceil(frames.length / 6); k > 0 && trail; k--) trail.add(frames.shift().e); if (trail) trail.draw(TRAIL_DECAY); }
-(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); })();
+(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); if (!document.getElementById('panel').classList.contains('hidden')) drawEQ(document.getElementById('eq'), eqSpectrum, climate.HEAT, climate.COLD); })();
 
 // ---- Sim link ----
 const info = document.getElementById('info');
@@ -261,7 +271,7 @@ function connect() {
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
     }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
-    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } earLevelTarget = m.levels['JO-E'] ?? 0; }
+    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; }
     if (m.type === 'beatgrid_state') {
       const st = m.state, el = document.getElementById('bgstate');
       el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;
@@ -348,7 +358,8 @@ setInterval(() => {
     amps[b.group] = level * gain;
     document.getElementById('m-' + b.group).style.width = (level * 100) + '%';
   }
-  ws.send(JSON.stringify({ cmd: 'audio', amps }));
+  ownEQ = true; eqSpectrum = eqFromBins(bins, hz); // this page listens by itself: it draws what IT hears, and the server reads the climate from its two shares
+  ws.send(JSON.stringify({ cmd: 'audio', amps, climate: [shareDb(bins, hz, WARM_HZ), shareDb(bins, hz, COLD_HZ), amps['JO-E'] / (gain || 1)] }));
 }, 33);
 
 document.getElementById('gain').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'audio_gain', value: +e.target.value })); // server-side listening (--audio)
@@ -365,6 +376,8 @@ addEventListener('message', e => {
   if (e.data.cmd === 'tap' && ws && ws.readyState === 1) ws.send(JSON.stringify({ cmd: 'tap', name: e.data.name, amplitude: e.data.amplitude, steps: e.data.steps }));
 });
 addEventListener('message', e => { if (e.data && e.data.source === 'dashboard' && e.data.cmd === 'toggle-params') document.getElementById('panel').classList.toggle('hidden'); });
+for (const key of ['heat_gain', 'cold_gain']) document.getElementById(key).oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key, value: +e.target.value }));
+fetch('/api/params').then(r => r.json()).then(p => { for (const key of ['heat_gain', 'cold_gain']) document.getElementById(key).value = p[key]; });
 document.getElementById('adapt').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'adapt', value: +e.target.value }));
 // ?embed : the brain alone, as a panel inside the beatgrid dashboard (which has its own readouts)
 if (new URLSearchParams(location.search).has('embed')) { document.getElementById('panel').classList.add('hidden'); document.getElementById('open').remove(); }

@@ -23,9 +23,11 @@
 <div id="panel">
   <div id="says">—</div>
   <div class="meter"><i id="level"></i></div>
+  <canvas id="eq" style="width:100%;height:56px;display:block;background:#060c14"></canvas>
   <div id="rows"></div>
   <div id="senses"></div>
 </div>
+<script src="/static/eq.js"></script>
 <script>
 // One row per engine knob: [key sent to the server, label, min, max, step]
 const KNOBS = [
@@ -33,6 +35,8 @@ const KNOBS = [
   ['weight_gain', 'Réactivité', 0.5, 1, 0.01],
   ['adapt', 'Fatigue', 0, 1, 0.05],
   ['noise_amp', 'Bruit de fond', 0, 0.5, 0.01],
+  ['heat_gain', 'Chaleur', 0, 1.5, 0.05],
+  ['cold_gain', 'Froid', 0, 1.5, 0.05],
 ];
 const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
 fetch('/api/params').then(r => r.json()).then(now => {
@@ -63,6 +67,7 @@ fetch('/api/senses').then(r => r.json()).then(list => list.filter(s => s.taps[0]
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === 'beatgrid') flash(m.sense);
+  if (m.type === 'audio_levels' && m.spectrum) drawEQ(document.getElementById('eq'), m.spectrum, m.levels.HEAT, m.levels.COLD);
   if (m.type !== 'metrics' || !m.fly_says) return;
   document.getElementById('says').textContent = (m.fly_says.verdict || '—').toUpperCase();
   document.getElementById('level').style.width = (m.fly_says.level * 100) + '%';

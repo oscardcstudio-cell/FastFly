@@ -14,8 +14,10 @@ The sequencer brings what sound cannot say: which loops play, and where the trac
 import asyncio, glob, json, os, time, urllib.request
 
 # ---- The mapping. Artistic, not physiology: edit freely. (sense, amplitude, steps) ----
-WARM = ("Temperature change", 0.5, 150)   # warm-coloured loop -> heat sensors
-COLD = ("Humidity change", 0.5, 150)      # cold-coloured loop -> humidity sensors
+# Heat and humidity are NOT here any more (Oscar, 2026-09-19): they come from the sound, all the time
+# (audio_in.Climate: low mids = warm, highs = cold). These two taps only serve the pages' by-hand buttons.
+WARM = ("Temperature change", 0.5, 150)
+COLD = ("Humidity change", 0.5, 150)
 BRIGHT = [("Light (left eye)", 0.15, 60), ("Light (right eye)", 0.15, 60)]  # bright loop -> the eye of its screen slot
 MOVING = [("Touch (left leg/body)", 0.4, 100), ("Touch (right leg/body)", 0.4, 100)]    # loop with a lot of motion -> touch, side of its slot
 FAST = [("Tickle (left antenna)", 0.4, 100), ("Tickle (right antenna)", 0.4, 100)]      # loop tagged "rapide" -> wind on the antenna of its slot
@@ -25,7 +27,7 @@ SECTIONS = {
     "suspension": FAST,                               # breath held: wind on both antennae
 }
 # What the pages show for each sense: (taps, French label, what fires it). /params lists them as buttons; two taps = left, right.
-LABELS = [([WARM], "chaleur", "loop chaude"), ([COLD], "humidité", "loop froide"),
+LABELS = [([WARM], "chaleur", "bas-médiums 200-500 Hz"), ([COLD], "humidité", "aigus 4-16 kHz"),
           (BRIGHT, "œil", "loop claire"), (MOVING, "toucher", "loop mobile"),
           (FAST, "vent antenne", "loop rapide · suspension"),
           (SECTIONS["drop"], "sucre", "drop"), (SECTIONS["break"], "odeur", "break")]
@@ -37,18 +39,12 @@ def senses_table():
 
 
 # thresholds read on Oscar's 240 tagged loops: brightest quarter (max 0.57), most moving quarter
-MIN_SATURATION, MIN_BRIGHT, MIN_MOTION = 0.15, 0.31, 4.16
+MIN_BRIGHT, MIN_MOTION = 0.31, 4.16
 
 
 def senses_for(tags, slot=0):
-    """Taps for one loop starting, from its colour tags (teinte 0-360, saturation, clarte 0-1)."""
+    """Taps for one loop starting, from its tags (clarte 0-1, mouvement, vitesse)."""
     taps = []
-    hue, sat = tags.get("teinte"), tags.get("saturation") or 0
-    if hue is not None and sat >= MIN_SATURATION:
-        if hue < 70 or hue >= 290:
-            taps.append(WARM)
-        elif 150 <= hue < 270:
-            taps.append(COLD)
     if (tags.get("clarte") or 0) >= MIN_BRIGHT:
         taps.append(BRIGHT[slot % 2])
     if (tags.get("mouvement") or 0) >= MIN_MOTION:
@@ -150,12 +146,12 @@ if __name__ == "__main__":
     red = {"teinte": 11, "saturation": 0.4, "clarte": 0.3}
     blue = {"teinte": 210, "saturation": 0.5, "clarte": 0.5}
     grey = {"teinte": 11, "saturation": 0.05, "clarte": 0.2}
-    assert senses_for(red) == [WARM]
-    assert senses_for(blue, slot=1) == [COLD, BRIGHT[1]]
+    assert senses_for(red) == []  # colour no longer warms the fly: the sound does
+    assert senses_for(blue, slot=1) == [BRIGHT[1]]
     assert senses_for(grey) == [] and senses_for({}) == []
     assert taps_for({"kind": "drop", "bar": 3}, {}) == SECTIONS["drop"]
     assert taps_for({"kind": "suspension"}, {}) == FAST
     assert senses_for({"mouvement": 9.0, "vitesse": "rapide"}, slot=1) == [MOVING[1], FAST[1]]
-    assert taps_for({"kind": "pattern", "colonnes": [5, 9, 404]}, {5: red, 9: blue}) == [WARM, COLD, BRIGHT[1]]
+    assert taps_for({"kind": "pattern", "colonnes": [5, 9, 404]}, {5: red, 9: blue}) == [BRIGHT[1]]
     assert taps_for({"kind": "tap"}, {}) == []
     print("mapping ok")
