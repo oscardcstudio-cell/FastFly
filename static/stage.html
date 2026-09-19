@@ -12,6 +12,7 @@
   canvas { display: block; }
   #panel { position: fixed; top: 12px; left: 12px; background: rgba(0,0,0,.7); padding: 10px 12px; border: 1px solid #234; border-radius: 6px; display: grid; gap: 6px; min-width: 260px; }
   #panel.hidden { display: none; }
+  #panel select { max-width: 260px; } /* a long device name must not stretch the whole panel */
   #panel select, #panel button { font: inherit; background: #0b1520; color: #cde; border: 1px solid #345; padding: 4px 6px; border-radius: 4px; }
   .row { display: flex; gap: 6px; align-items: center; }
   .meter { flex: 1; height: 6px; background: #112; }
@@ -71,7 +72,7 @@ const FLASH_MS = 1800;
 const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 let ANN = [], sensesData = null, earLevel = 0, earLevelTarget = 0, hoveredAnn = null;
 const senseFlash = {}, tapToSense = {};
-let annotOn = new URLSearchParams(location.search).has('embed');
+let annotOn = localStorage.flyAnnot !== '0'; // on unless switched off on this browser (I key or panel button): the Resolume capture turns it off once
 const ann = document.getElementById('annot'), actx2 = ann.getContext('2d');
 function sizeAnnot() {
   const dpr = Math.min(devicePixelRatio, 2);
@@ -80,7 +81,7 @@ function sizeAnnot() {
   actx2.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 sizeAnnot();
-function setAnnot(on) { annotOn = on; ann.style.display = on ? 'block' : 'none'; document.getElementById('annotBtn').classList.toggle('on', on); }
+function setAnnot(on) { annotOn = on; localStorage.flyAnnot = on ? '1' : '0'; ann.style.display = on ? 'block' : 'none'; document.getElementById('annotBtn').classList.toggle('on', on); }
 setAnnot(annotOn);
 // Slots are fixed fractions of the screen (never move) so "i" markers never collide;
 // only the leader line's far end (the live projected neuron) moves as the brain turns.
