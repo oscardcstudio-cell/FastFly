@@ -46,6 +46,7 @@ class SimEngine:
 
         # GPU arrays — connectivity
         self.d_offsets = cp.asarray(offsets)
+        self.d_outdeg = cp.diff(self.d_offsets.astype(cp.int64))  # connections leaving each neuron
         self.d_targets = cp.asarray(targets)
         w_int8, w_scales = quantize_weights_int8(weights, offsets, self.n_neurons)
         self.d_weights = cp.asarray(w_int8)
@@ -399,8 +400,11 @@ class SimEngine:
             "steps_per_sec": round(steps_per_sec, 1),
         }
 
+        fired = cp.unpackbits(d_accum_bits.view(cp.uint8), bitorder='little')[:self.n_neurons]
+        # connections carrying a signal in this batch. ponytail: a neuron firing twice in the batch counts once
+        # (accum bits are an OR); sum per substep in the count_spikes kernel if the exact traffic ever matters
+        result["connections"] = int(self.d_outdeg[fired.astype(cp.bool_)].sum())
         if self._bass_readout is not None:
-            fired = cp.unpackbits(d_accum_bits.view(cp.uint8), bitorder='little')[:self.n_neurons]
             result["bass_readout"] = float(fired[self._bass_readout].mean())
 
         # Group rates (for heatmap) — only compute if enabled

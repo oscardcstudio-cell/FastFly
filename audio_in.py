@@ -34,28 +34,25 @@ def share_db(mag, samplerate, band):
 
 
 class Climate:
-    """HEAT and COLD 0..1 from the two shares. Measured on one set, the warm share sat at -6..-1 dB and the cold one
-    at -24..-11 dB: every track has its own range, so each share is read against ITS recent low and high (they creep
-    back ~0.5 dB/s), never against a fixed scale. Warm = warmer than this music usually is."""
-    SPAN, CREEP = 6.0, 0.02  # dB: the least range worth stretching to 0..1 (a steady sound has no climate swings); creep per push
+    """HEAT and COLD 0..1 from ONE balance, warm share minus cold share (dB): the two are compared, never both on.
+    Read separately (first version) each sat around 0.5 on any music, so the heat was always firing (Oscar, live set).
+    The balance is read against ITS recent low and high (they creep back ~0.5 dB/s): every track has its own range.
+    The middle of the range is neutral: neither. Warm = warmer than this music usually is."""
+    SPAN, CREEP, DEAD = 6.0, 0.02, 0.1  # dB: least range worth stretching (a steady sound has no climate); creep per push; neutral half-width
 
     def __init__(self):
-        self.range = {"HEAT": None, "COLD": None}
+        self.range = None
 
     def push(self, warm_db, cold_db, loudness):
         gate = float(np.clip((loudness - 0.25) / 0.15, 0, 1))  # silence has no climate (loudness = the JO-E level)
-        out = {}
-        for key, v in (("HEAT", warm_db), ("COLD", cold_db)):
-            if gate == 0:
-                out[key] = 0.0
-                continue
-            lo, hi = self.range[key] or (v, v)
-            lo, hi = min(v, lo + self.CREEP), max(v, hi - self.CREEP)
-            self.range[key] = (lo, hi)
-            mid = (lo + hi) / 2
-            span = max(hi - lo, self.SPAN)
-            out[key] = float(np.clip(0.5 + (v - mid) / span, 0, 1)) * gate
-        return out
+        if gate == 0:
+            return {"HEAT": 0.0, "COLD": 0.0}
+        v = warm_db - cold_db
+        lo, hi = self.range or (v, v)
+        lo, hi = self.range = min(v, lo + self.CREEP), max(v, hi - self.CREEP)
+        t = (v - (lo + hi) / 2) / max(hi - lo, self.SPAN)  # -0.5 (coldest lately) .. +0.5 (warmest lately)
+        side = lambda x: float(np.clip((x - self.DEAD) / (0.5 - self.DEAD), 0, 1)) * gate
+        return {"HEAT": side(t), "COLD": side(-t)}
 
 
 def spectrum(mag, samplerate):
@@ -117,6 +114,12 @@ if __name__ == "__main__":
     for v in [-10.0] * 50 + [-3.0]:
         heat = w.push(v, -30.0, 1.0)["HEAT"]
     assert heat > 0.9 and w.push(-3.0, -30.0, 0.0)["HEAT"] == 0.0  # warmer than usual = hot; silence = nothing
+    w = Climate()
+    for v in [-10.0] * 50:
+        calm = w.push(v, -20.0, 1.0)
+    assert calm == {"HEAT": 0.0, "COLD": 0.0}, calm  # a steady balance is neutral: the heat no longer fires all the time
+    cold = w.push(-10.0, -12.0, 1.0)
+    assert cold["COLD"] > 0.9 and cold["HEAT"] == 0.0, cold  # highs rising = cold, and never both at once
     assert len(spectrum(np.ones(N // 2 + 1, dtype=np.float32), 48000)) == 32
     stop = start(lambda l, s: print(" ".join(f"{k} {v:.2f}" for k, v in l.items()), end="\r", flush=True))
     time.sleep(5); stop(); print()
