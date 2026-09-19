@@ -17,13 +17,14 @@
   .meter { flex: 1; height: 6px; background: #112; }
   .meter i { display: block; height: 100%; width: 0; background: #3cf; }
   .lbl { width: 42px; }
-  #close { position: absolute; top: 6px; right: 6px; padding: 2px 8px; }
+  #panel #close { position: absolute; top: 6px; right: 6px; padding: 2px 9px; background: #ff2d95; border-color: #ff2d95; color: #fff; font-weight: 700; font-size: 1.15em; }
   #open { display: none; position: fixed; top: 12px; left: 12px; font: inherit; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; }
   /* touch screens have no H key: a button brings the panel back, and everything gets finger-sized */
   @media (pointer: coarse) {
     #panel { font-size: 15px; right: 12px; gap: 12px; padding-top: 40px; }
     #panel input[type=range] { flex: 1; height: 32px; }
     #panel select, #panel button { padding: 10px 12px; }
+    #panel #close { padding: 8px 14px; }
     .lbl { width: 60px; }
     #hkey { display: none; }
     #panel.hidden + #open { display: block; }
