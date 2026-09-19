@@ -222,6 +222,45 @@ class SimEngine:
             if stim in self._stimuli:
                 self._audio[channel] = [cp.asarray(self._stimuli[stim].astype(np.int64)), 0.0]
 
+        self._build_loom_and_dodge(data)
+
+    # Looming test (Oscar, 2026-09-19): "the waveform arrives frontally, will the mouche try to dodge it?"
+    LOOM_TYPES = ("LPLC2", "LC4")     # looming-selective (expanding stimulus) cells in the optic lobe: prefer these
+                                      # over raw photoreceptors ("Light (left/right eye)") for a looming stimulus
+    TURN_TYPES = ("DNA01", "DNA02")   # descending neurons that steer a turn
+    ESCAPE_TYPE = "DNP01"             # giant fiber: the fly's fast straight-line escape
+
+    def _build_loom_and_dodge(self, data):
+        self._dodge_readout = {}
+        if "cell_type" not in data or "side" not in data:
+            print("  loom/dodge: no cell_type or side column in annotations, skipped")
+            return
+        ct = np.char.upper(np.asarray(data["cell_type"]).astype(str))
+        side = np.asarray(data["side"]).astype(str)
+
+        loom_mask = np.isin(ct, self.LOOM_TYPES)
+        for side_name, key in (("left", "LOOM_L"), ("right", "LOOM_R")):
+            idx = np.nonzero(loom_mask & (side == side_name))[0]
+            if len(idx):
+                self._audio[key] = [cp.asarray(idx), 0.0]
+        print(f"  loom input: { {k: len(self._audio[k][0]) for k in ('LOOM_L', 'LOOM_R') if k in self._audio} }"
+              f" ({'+'.join(self.LOOM_TYPES)})")
+
+        turn_mask = np.isin(ct, self.TURN_TYPES)
+        escape_mask = ct == self.ESCAPE_TYPE
+        for name, mask in (("left", turn_mask & (side == "left")),
+                           ("right", turn_mask & (side == "right")),
+                           ("escape", escape_mask)):
+            idx = np.nonzero(mask)[0]
+            if len(idx):
+                self._dodge_readout[name] = cp.asarray(idx)
+        print(f"  dodge readout: { {k: len(v) for k, v in self._dodge_readout.items()} }"
+              f" ({'+'.join(self.TURN_TYPES)} / {self.ESCAPE_TYPE})")
+
+    def get_dodge_groups(self):
+        """Neuron counts behind each dodge key, so a page can tell 'not found in this connectome' from 'found but quiet'."""
+        return {name: int(len(self._dodge_readout.get(name, ()))) for name in ("left", "right", "escape")}
+
     def set_audio(self, amps):
         """amps: {group: amplitude}, e.g. {'JO-A': 0.8}. Unknown groups ignored."""
         for name, amp in amps.items():
@@ -254,6 +293,7 @@ class SimEngine:
         self._motor_group_names = []
         self._num_motor_groups = 0
         self._neuron_to_motor = cp.full(self.n_neurons, -1, dtype=cp.int32)
+        self._dodge_readout = {}
 
     def inject_stimulus(self, neuron_indices, amplitude=0.5):
         self._stimulus_indices = cp.asarray(np.array(neuron_indices, dtype=np.int64))
@@ -406,6 +446,9 @@ class SimEngine:
         result["connections"] = int(self.d_outdeg[fired.astype(cp.bool_)].sum())
         if self._bass_readout is not None:
             result["bass_readout"] = float(fired[self._bass_readout].mean())
+        if self._dodge_readout:
+            result["dodge"] = {name: float(fired[self._dodge_readout[name]].mean()) if name in self._dodge_readout else 0.0
+                               for name in ("left", "right", "escape")}
 
         # Group rates (for heatmap) — only compute if enabled
         if self.send_group_rates:

@@ -49,13 +49,20 @@ clients: list[WebSocket] = []
 
 audio_gain = 1.5  # 1.0 only lit the brain on the big kicks (Oscar, 2026-09-19); the pages' fader goes to 4
 climate_gain = {"HEAT": 0.5, "COLD": 0.5}  # how hard the sound's warmth and coldness push their sense (the pages' faders)
+loom_gain = 0.6  # how hard the arriving-waveform test pushes the looming neurons (/params "Vision approche"); 0 = unplugged
 audio_levels = {}
 audio_spectrum = []
 
 
 def hear(levels):
-    """Band and climate levels 0..1 -> the engine, each with its own gain."""
-    engine.set_audio({k: v * climate_gain.get(k, audio_gain) for k, v in levels.items()})
+    """Band, climate and loom levels 0..1 -> the engine, each with its own gain."""
+    def gain(k):
+        if k in climate_gain:
+            return climate_gain[k]
+        if k.startswith("LOOM_"):
+            return loom_gain
+        return audio_gain
+    engine.set_audio({k: v * gain(k) for k, v in levels.items()})
 
 
 @app.on_event("startup")
@@ -132,7 +139,7 @@ async def get_params():
     """Current knobs, so the settings window opens on the real values."""
     return JSONResponse({"audio_gain": audio_gain, "weight_gain": weight_gain,
                          "fly_step": fly_says.step, "adapt": float(engine.adapt_inc), "noise_amp": float(engine.noise_amp),
-                         "heat_gain": climate_gain["HEAT"], "cold_gain": climate_gain["COLD"]})
+                         "heat_gain": climate_gain["HEAT"], "cold_gain": climate_gain["COLD"], "loom_gain": loom_gain})
 
 
 def _anchors(idx):
@@ -214,7 +221,7 @@ async def sim_loop():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    global sim_running, batch_size, audio_gain, weight_gain
+    global sim_running, batch_size, audio_gain, weight_gain, loom_gain
 
     await ws.accept()
     clients.append(ws)
@@ -227,6 +234,7 @@ async def websocket_endpoint(ws: WebSocket):
         "group_labels": engine.group_labels,
         "body_info": engine.get_body_info(),
         "audio_groups": engine.get_audio_groups(),
+        "dodge_groups": engine.get_dodge_groups(),
     }))
     await ws.send_text(json.dumps({
         "type": "state",
@@ -297,6 +305,8 @@ async def websocket_endpoint(ws: WebSocket):
                     audio_gain = max(0.0, min(4.0, float(value)))
                 elif key in ("heat_gain", "cold_gain"):
                     climate_gain[key[:4].upper()] = max(0.0, min(1.5, float(value)))
+                elif key == "loom_gain":
+                    loom_gain = max(0.0, min(3.0, float(value)))
                 elif key == "fly_step":
                     fly_says.step = max(0.5, min(12.0, float(value)))
                 elif key == "audio_mute":

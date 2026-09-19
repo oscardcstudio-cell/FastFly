@@ -29,6 +29,10 @@
   #knobs { position: fixed; top: 48px; left: 12px; width: 300px; height: calc(100% - 60px); max-height: 480px; border: 1px solid #234; border-radius: 6px; background: #000; }
   #annot { position: fixed; inset: 0; pointer-events: none; } /* stays visible always: the connection pulse must survive the Repères toggle (Resolume cuts the "i" markers, not this) */
   #annotBtn.on { color: #6cf; border-color: #6cf; }
+  #loomBtn { position: fixed; top: 12px; right: 12px; z-index: 3; font: inherit; font-size: 16px; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+  #loomBtn.on { color: #6cf; border-color: #6cf; }
+  #loom { position: fixed; bottom: 12px; right: 12px; width: 260px; height: 176px; background: rgba(0,0,0,.88); border: 1px solid #234; border-radius: 6px; z-index: 2; display: none; }
+  #loom.on { display: block; }
   /* touch screens have no H key: a button brings the panel back, and everything gets finger-sized */
   @media (pointer: coarse) {
     #panel { font-size: 15px; right: 12px; gap: 12px; padding-top: 40px; }
@@ -63,6 +67,8 @@
   <div id="hkey" style="opacity:.6">H : masquer ce panneau · I : repères</div>
 </div>
 <button id="open" aria-label="réglages">☰</button>
+<button id="loomBtn" aria-label="vision d'approche" title="vision d'approche : la mouche esquive-t-elle le son ?">◎</button>
+<canvas id="loom"></canvas>
 <canvas id="annot"></canvas>
 <script>
 // Artistic mapping, not physiology: bass -> JO-B, mids -> JO-A, highs -> JO-C, loudness -> JO-E
@@ -128,6 +134,71 @@ function drawConnHist(canvas) {
   c.fillStyle = '#dee8ff'; c.font = 'bold 11px system-ui'; c.textAlign = 'right'; c.textBaseline = 'middle';
   c.fillText(fmtConn(connLast), w - 4, h / 2);
 }
+// ---- Looming test (Oscar, 2026-09-19): the waveform as an object flying at each eye, and the mouche's dodge readout ----
+// One display, icon-toggled, off by default: it must never disturb the live /stage view.
+let loomOn = localStorage.flyLoom === '1';
+const loomPulses = []; // {side:'L'|'R', t0, mag}
+const loomLast = { L: 0, R: 0 }, loomCooldown = { L: 0, R: 0 };
+const LOOM_DUR = 500, LOOM_COOLDOWN = 90, LOOM_GATE = 0.12;
+let dodgeGroups = { left: 0, right: 0, escape: 0 };
+const dodgeFlash = { left: 0, right: 0, escape: 0 };
+function setLoom(on) {
+  loomOn = on; localStorage.flyLoom = on ? '1' : '0';
+  document.getElementById('loomBtn').classList.toggle('on', on);
+  document.getElementById('loom').classList.toggle('on', on);
+}
+function onLoomLevel(side, v) {
+  const now = performance.now();
+  if (v > LOOM_GATE && v > loomLast[side] && now - loomCooldown[side] > LOOM_COOLDOWN) {
+    loomPulses.push({ side, t0: now, mag: v });
+    loomCooldown[side] = now;
+  }
+  loomLast[side] = v;
+}
+function onDodge(d) { for (const k of ['left', 'right', 'escape']) if (d[k] > 0) dodgeFlash[k] = performance.now(); }
+function drawLoom(canvas) {
+  const dpr = Math.min(devicePixelRatio, 2), w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
+  const now = performance.now(), tunH = h - 30;
+  // two tunnels, one per eye: perspective guides converge on the vanishing point where the eye sits.
+  // Kept narrower than half the canvas (else the two tunnels' tips touch and read as one shape).
+  [0.24, 0.76].forEach(fx => {
+    const cx = w * fx, cy = tunH / 2;
+    c.strokeStyle = 'rgba(154,187,204,.25)'; c.lineWidth = 1;
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      c.beginPath(); c.moveTo(cx + dx * w * 0.15, cy + dy * tunH * 0.42); c.lineTo(cx, cy); c.stroke();
+    }
+  });
+  for (let k = loomPulses.length - 1; k >= 0; k--) {
+    const p = loomPulses[k], age = now - p.t0;
+    if (age > LOOM_DUR) { loomPulses.splice(k, 1); continue; }
+    const t = age / LOOM_DUR; // 0 = just arrived (far), 1 = at the eye
+    const cx = w * (p.side === 'L' ? 0.24 : 0.76), cy = tunH / 2;
+    const r = 2 + t * t * Math.min(w, tunH) * 0.28 * (0.4 + 0.6 * p.mag); // grows in as it approaches, not linearly: a looming object accelerates in apparent size
+    c.beginPath(); c.arc(cx, cy, r, 0, 7);
+    c.fillStyle = `rgba(255,${Math.round(210 - t * 120)},${Math.round(Math.max(0, 90 - t * 90))},${(1 - t) * 0.8})`;
+    c.fill();
+  }
+  // dodge readout: turn-left / escape / turn-right. Dim + crossed out = these neurons don't exist in this connectome (honest, not zero).
+  const ly = h - 13, lx = [w * 0.22, w * 0.5, w * 0.78];
+  ['left', 'escape', 'right'].forEach((k, i) => {
+    const found = dodgeGroups[k] > 0, lit = found && now - dodgeFlash[k] < 300;
+    c.globalAlpha = found ? (lit ? 1 : 0.28) : 0.15;
+    c.fillStyle = k === 'escape' ? '#ff5a5a' : '#3ddc84';
+    c.beginPath();
+    if (k === 'left') { c.moveTo(lx[i] + 7, ly - 8); c.lineTo(lx[i] - 7, ly); c.lineTo(lx[i] + 7, ly + 8); }
+    else if (k === 'right') { c.moveTo(lx[i] - 7, ly - 8); c.lineTo(lx[i] + 7, ly); c.lineTo(lx[i] - 7, ly + 8); }
+    else for (let a = 0; a < 8; a++) c.lineTo(lx[i] + Math.cos(a * Math.PI / 4) * (a % 2 ? 4 : 9), ly + Math.sin(a * Math.PI / 4) * (a % 2 ? 4 : 9));
+    c.closePath(); c.fill();
+    if (!found) { c.strokeStyle = '#678'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(lx[i] - 8, ly - 8); c.lineTo(lx[i] + 8, ly + 8); c.stroke(); }
+  });
+  c.globalAlpha = 1;
+}
+
 function drawConnPulse() {
   if (!connFlash) return;
   const age = performance.now() - connFlash.t;
@@ -304,7 +375,9 @@ function drawGlow() {
 
 // a batch lands as ~40 frames at once: spread them over the next screen frames instead of one flash
 function playFrames() { for (let k = Math.ceil(frames.length / 6); k > 0 && trail; k--) trail.add(frames.shift().e); if (trail) trail.draw(TRAIL_DECAY); }
-(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); if (!document.getElementById('panel').classList.contains('hidden')) { drawEQ(document.getElementById('eq'), eqSpectrum, climate.HEAT, climate.COLD); drawConnHist(document.getElementById('connhist')); } })();
+(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); if (!document.getElementById('panel').classList.contains('hidden')) { drawEQ(document.getElementById('eq'), eqSpectrum, climate.HEAT, climate.COLD); drawConnHist(document.getElementById('connhist')); } if (loomOn) drawLoom(document.getElementById('loom')); })();
+setLoom(loomOn);
+document.getElementById('loomBtn').onclick = () => setLoom(!loomOn);
 
 // ---- Sim link ----
 const info = document.getElementById('info');
@@ -327,14 +400,16 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
+    if (m.type === 'init' && m.dodge_groups) dodgeGroups = m.dodge_groups;
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
     if (m.type === 'metrics' && m.connections != null) onConnections(m.connections);
+    if (m.type === 'metrics' && m.dodge) onDodge(m.dodge);
     if (m.type === 'metrics' && m.fly_says) {
       document.getElementById('flysays').textContent = `mouche : ${(m.fly_says.verdict || '—').toUpperCase()}`;
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
     }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
-    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; }
+    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; if ('LOOM_L' in m.levels) onLoomLevel('L', m.levels.LOOM_L); if ('LOOM_R' in m.levels) onLoomLevel('R', m.levels.LOOM_R); }
     if (m.type === 'beatgrid_state') {
       const st = m.state, el = document.getElementById('bgstate');
       el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;

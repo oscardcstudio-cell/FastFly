@@ -55,6 +55,22 @@ class Climate:
         return {"HEAT": side(t), "COLD": side(-t)}
 
 
+def channel_level(x):
+    """RMS loudness of one channel's block, -80..-20 dB -> 0..1 (same scale as band_levels)."""
+    rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2)) + 1e-9)
+    return float(np.clip((20 * np.log10(rms) + 80) / 60, 0, 1))
+
+
+def loom_onset(level, baseline, follow=0.08, gain=3.0):
+    """Positive jump of `level` over its own slow-following baseline: something looming in fast.
+    A steady tone settles to onset 0 (baseline catches up); a transient onsets near 1 first.
+    ponytail: gain=3.0 is a first guess for "moderate", tune from /params once heard."""
+    if baseline is None:
+        return 0.0, level
+    onset = float(np.clip((level - baseline) * gain, 0, 1))
+    return onset, baseline + (level - baseline) * follow
+
+
 def spectrum(mag, samplerate):
     """32 log-band levels 0..1, same dB scale as band_levels."""
     hz = samplerate / N
@@ -69,6 +85,7 @@ def start(on_levels):
     window = np.blackman(N).astype(np.float32)
     smooth = np.zeros(N // 2 + 1, dtype=np.float32)
     weather = Climate()
+    loom_base = {"L": None, "R": None}  # each channel's own slow-following floor, for loom_onset
     # WASAPI loopback sends nothing at all while the computer is silent: without this the ear would stay stuck on its last level
     last = [time.monotonic()]
 
@@ -76,13 +93,21 @@ def start(on_levels):
 
     def callback(data, frames, time_info, status):
         sr = now["sr"]
-        x = np.frombuffer(data, dtype=np.float32).reshape(-1, now["ch"]).mean(1)[-N:]
+        buf = np.frombuffer(data, dtype=np.float32).reshape(-1, now["ch"])
+        x = buf.mean(1)[-N:]
         if len(x) == N:
             mag = np.abs(np.fft.rfft(x * window)) / N  # the browser analyser's scaling, so both routes read the same level
             smooth[:] = 0.6 * smooth + 0.4 * mag  # same smoothing as the browser analyser
             last[0] = time.monotonic()
             levels = band_levels(smooth, sr)
             levels.update(weather.push(share_db(smooth, sr, WARM_HZ), share_db(smooth, sr, COLD_HZ), levels["JO-E"]))
+            # Looming test (Oscar, 2026-09-19): the waveform arrives frontally, stereo -> left/right eye.
+            # Mono input drives both eyes the same, honestly (no channel to split).
+            l_lvl = channel_level(buf[-N:, 0])
+            r_lvl = channel_level(buf[-N:, 1]) if now["ch"] > 1 else l_lvl
+            on_l, loom_base["L"] = loom_onset(l_lvl, loom_base["L"])
+            on_r, loom_base["R"] = loom_onset(r_lvl, loom_base["R"])
+            levels["LOOM_L"], levels["LOOM_R"] = on_l, on_r
             on_levels(levels, spectrum(smooth, sr))
         return (None, pa.paContinue)
 
@@ -113,7 +138,7 @@ def start(on_levels):
         while not alive.wait(0.2):
             if time.monotonic() - last[0] > 0.3:
                 smooth[:] = 0
-                on_levels({k: 0.0 for k in [*BANDS, "HEAT", "COLD"]}, [0.0] * 32)
+                on_levels({k: 0.0 for k in [*BANDS, "HEAT", "COLD", "LOOM_L", "LOOM_R"]}, [0.0] * 32)
             # Headphones plugged in mid-set: Windows moves the sound, the fly kept listening to the silent speakers
             # (Oscar, 2026-09-19). Only looked at during silence, every 3 s: a playing output is the right one.
             if time.monotonic() - last[0] > 3 and time.monotonic() - checked > 3:
@@ -147,5 +172,12 @@ if __name__ == "__main__":
     cold = w.push(-10.0, -12.0, 1.0)
     assert cold["COLD"] > 0.9 and cold["HEAT"] == 0.0, cold  # highs rising = cold, and never both at once
     assert len(spectrum(np.ones(N // 2 + 1, dtype=np.float32), 48000)) == 32
+    assert channel_level(np.zeros(N, dtype=np.float32)) < 0.05 and channel_level(np.ones(N, dtype=np.float32)) > 0.9
+    on0, base0 = loom_onset(0.5, None)
+    assert on0 == 0.0 and base0 == 0.5  # first call only seeds the baseline
+    on1, base1 = loom_onset(0.9, base0)
+    assert on1 > 0.9 and base0 < base1 < 0.9  # a sudden jump onsets near-max, baseline creeps toward it
+    on2, _ = loom_onset(0.5, 0.5)
+    assert on2 == 0.0  # steady level after settling = no onset
     stop = start(lambda l, s: print(" ".join(f"{k} {v:.2f}" for k, v in l.items()), end="\r", flush=True))
     time.sleep(5); stop(); print()

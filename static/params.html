@@ -38,6 +38,7 @@ const KNOBS = [
   ['noise_amp', 'Bruit de fond', 0, 0.5, 0.01],
   ['heat_gain', 'Chaleur', 0, 1.5, 0.05],
   ['cold_gain', 'Froid', 0, 1.5, 0.05],
+  ['loom_gain', 'Vision approche', 0, 2, 0.05],
 ];
 const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
 fetch('/api/params').then(r => r.json()).then(now => {
