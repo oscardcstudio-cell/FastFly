@@ -139,6 +139,7 @@ function drawConnHist(canvas) {
 let loomOn = localStorage.flyLoom === '1';
 const LOOM_DUR = 1400; // ms from the horizon to the eye
 let dodgeGroups = { left: 0, right: 0, escape: 0 };
+let opticActivity = { left: 0, right: 0 }; // proof the signal crosses the optic lobe, not just the readout
 const dodgeFlash = { left: 0, right: 0, escape: 0 };
 function setLoom(on) {
   loomOn = on; localStorage.flyLoom = on ? '1' : '0';
@@ -147,9 +148,15 @@ function setLoom(on) {
 }
 // the waveform itself: every level the eye received, stamped, so it can fly from the horizon to the viewer
 const loomWave = { L: [], R: [] };
-function onLoomLevel(side, v, a) { // v = impulse sent to the eye (onset), a = loudness: the waveform itself
+// EQ mode (Oscar, 2026-09-19): "à gauche les eq de bass, à droite les eq de treble" — each ring is that
+// instant's half-spectrum traced in polar, not a smooth circle. Colors reused from eq.js's own band coloring.
+function bandColor(fi) {
+  const mid = Math.sqrt(EQ_EDGES[fi] * EQ_EDGES[fi + 1]);
+  return mid >= WARM_HZ[0] && mid < WARM_HZ[1] ? WARM_COLOR : mid >= COLD_HZ[0] ? COLD_COLOR : '#5a7890';
+}
+function onLoomLevel(side, v, a, bands) { // v = impulse sent to the eye (onset), a = loudness, bands = its half-spectrum (16 values)
   const now = performance.now(), q = loomWave[side];
-  q.push({ t0: now, v, a });
+  q.push({ t0: now, v, a, bands });
   while (q.length && now - q[0].t0 > LOOM_DUR) q.shift();
 }
 function onDodge(d) { for (const k of ['left', 'right', 'escape']) if (d[k] > 0) dodgeFlash[k] = performance.now(); }
@@ -163,8 +170,15 @@ function drawLoom(canvas) {
   const now = performance.now(), tunH = h - 30;
   // two tunnels, one per eye: perspective guides converge on the vanishing point where the eye sits.
   // Kept narrower than half the canvas (else the two tunnels' tips touch and read as one shape).
-  [0.24, 0.76].forEach(fx => {
+  [['left', 0.24], ['right', 0.76]].forEach(([side, fx]) => {
     const cx = w * fx, cy = tunH / 2;
+    // the optic lobe itself, glowing at the vanishing point: proof the signal crossed it, not just the readout
+    const lobe = opticActivity[side] || 0;
+    if (lobe > 0.001) {
+      const g = c.createRadialGradient(cx, cy, 0, cx, cy, tunH * 0.3);
+      g.addColorStop(0, `rgba(110,220,255,${Math.min(0.7, lobe * 6)})`); g.addColorStop(1, 'rgba(110,220,255,0)');
+      c.fillStyle = g; c.fillRect(cx - tunH * 0.3, cy - tunH * 0.3, tunH * 0.6, tunH * 0.6);
+    }
     c.strokeStyle = 'rgba(154,187,204,.25)'; c.lineWidth = 1;
     for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       c.beginPath(); c.moveTo(cx + dx * w * 0.15, cy + dy * tunH * 0.42); c.lineTo(cx, cy); c.stroke();
@@ -172,18 +186,25 @@ function drawLoom(canvas) {
   });
   // each received level is a ring flying out of the vanishing point toward the viewer: the waveform arrives
   // head-on. Perspective: size ~ 1/distance, so rings crawl far away and rush in close. A peak = a thick bright ring.
-  for (const [side, fx] of [['L', 0.24], ['R', 0.76]]) {
+  // EQ mode: the ring is that instant's half-spectrum wrapped in a circle (radius per band), not a smooth arc —
+  // left eye = bass half (indices 0-15), right eye = treble half (16-31), so you see the EQ itself arrive.
+  for (const [side, fx, base] of [['L', 0.24, 0], ['R', 0.76, 16]]) {
     const cx = w * fx, cy = tunH / 2, big = Math.min(w * 0.26, tunH * 0.5);
     for (const p of loomWave[side]) {
       const t = Math.min(1, (now - p.t0) / LOOM_DUR), r = big * 0.06 / (1.06 - t);
-      c.beginPath(); c.arc(cx, cy, Math.min(r, big * 1.4), 0, 7);
       // the waveform: a pale ring as wide as the sound is loud; an impulse the eye actually got: thick, hot
-      const fade = Math.min(1, t * 4);
-      if (p.v > 0.1) { c.lineWidth = 1 + p.v * (2 + t * 8); c.strokeStyle = `rgba(255,${Math.round(190 - p.v * 130)},60,${fade})`; }
-      else { c.lineWidth = 0.5 + p.a * 2.5; c.strokeStyle = `rgba(150,200,230,${(0.2 + 0.6 * p.a) * fade})`; }
-      c.stroke();
+      const fade = Math.min(1, t * 4), lit = p.v > 0.1;
+      c.lineWidth = lit ? 1 + p.v * (2 + t * 8) : 0.5 + p.a * 2.5;
+      const bands = (p.bands && p.bands.length) ? p.bands : new Array(16).fill(0), n = bands.length;
+      for (let i = 0; i < n; i++) {
+        const rad = Math.min(r * (0.55 + 0.9 * bands[i]), big * 1.4);
+        c.strokeStyle = lit ? bandColor(base + i) : `rgba(150,200,230,${(0.2 + 0.6 * p.a) * fade})`;
+        c.globalAlpha = lit ? fade : 1;
+        c.beginPath(); c.arc(cx, cy, rad, (i / n) * Math.PI * 2, ((i + 1) / n) * Math.PI * 2); c.stroke();
+      }
     }
   }
+  c.globalAlpha = 1;
   // dodge readout: turn-left / escape / turn-right. Dim + crossed out = these neurons don't exist in this connectome (honest, not zero).
   const ly = h - 13, lx = [w * 0.22, w * 0.5, w * 0.78];
   ['left', 'escape', 'right'].forEach((k, i) => {
@@ -405,12 +426,13 @@ function connect() {
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
     if (m.type === 'metrics' && m.connections != null) onConnections(m.connections);
     if (m.type === 'metrics' && m.dodge) onDodge(m.dodge);
+    if (m.type === 'metrics' && m.optic_activity) opticActivity = m.optic_activity;
     if (m.type === 'metrics' && m.fly_says) {
       document.getElementById('flysays').textContent = `mouche : ${(m.fly_says.verdict || '—').toUpperCase()}`;
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
     }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
-    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; if ('LOOM_L' in m.levels) onLoomLevel('L', m.levels.LOOM_L, m.levels['JO-E'] || 0); if ('LOOM_R' in m.levels) onLoomLevel('R', m.levels.LOOM_R, m.levels['JO-E'] || 0); }
+    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } if ('JO-E' in m.levels) earLevelTarget = m.levels['JO-E']; for (const k in climate) if (k in m.levels) climate[k] = m.levels[k]; if (m.spectrum && !ownEQ) eqSpectrum = m.spectrum; if ('LOOM_L' in m.levels) onLoomLevel('L', m.levels.LOOM_L, m.levels['JO-E'] || 0, (m.spectrum || []).slice(0, 16)); if ('LOOM_R' in m.levels) onLoomLevel('R', m.levels.LOOM_R, m.levels['JO-E'] || 0, (m.spectrum || []).slice(16, 32)); }
     if (m.type === 'beatgrid_state') {
       const st = m.state, el = document.getElementById('bgstate');
       el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;

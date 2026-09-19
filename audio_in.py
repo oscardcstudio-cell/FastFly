@@ -71,6 +71,11 @@ def loom_onset(level, baseline, follow=0.08, gain=3.0):
     return onset, baseline + (level - baseline) * follow
 
 
+def band_energy(bands01):
+    """Mean level (0..1, same dB scale) of a slice of the 32-band spectrum."""
+    return float(np.mean(bands01)) if len(bands01) else 0.0
+
+
 def spectrum(mag, samplerate):
     """32 log-band levels 0..1, same dB scale as band_levels."""
     hz = samplerate / N
@@ -101,14 +106,16 @@ def start(on_levels):
             last[0] = time.monotonic()
             levels = band_levels(smooth, sr)
             levels.update(weather.push(share_db(smooth, sr, WARM_HZ), share_db(smooth, sr, COLD_HZ), levels["JO-E"]))
-            # Looming test (Oscar, 2026-09-19): the waveform arrives frontally, stereo -> left/right eye.
-            # Mono input drives both eyes the same, honestly (no channel to split).
-            l_lvl = channel_level(buf[-N:, 0])
-            r_lvl = channel_level(buf[-N:, 1]) if now["ch"] > 1 else l_lvl
-            on_l, loom_base["L"] = loom_onset(l_lvl, loom_base["L"])
-            on_r, loom_base["R"] = loom_onset(r_lvl, loom_base["R"])
+            # Looming test (Oscar, 2026-09-19; EQ split 2026-09-19): "vision approche" in EQ mode, not stereo —
+            # a bass peak looms at the left eye, a treble peak looms at the right eye (Oscar: "je voudrais à
+            # gauche les eq de bass et à droite les eq de treble"). Same 32-band spectrum the pages already draw,
+            # split in half: no channel to read for a mono source, but the two halves still differ.
+            spec = spectrum(smooth, sr)
+            bass_lvl, treble_lvl = band_energy(spec[:16]), band_energy(spec[16:])
+            on_l, loom_base["L"] = loom_onset(bass_lvl, loom_base["L"])
+            on_r, loom_base["R"] = loom_onset(treble_lvl, loom_base["R"])
             levels["LOOM_L"], levels["LOOM_R"] = on_l, on_r
-            on_levels(levels, spectrum(smooth, sr))
+            on_levels(levels, spec)
         return (None, pa.paContinue)
 
     def default_output(audio):

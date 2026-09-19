@@ -20,3 +20,5 @@ __pycache__/
 # Misc
 nul
 fly.log
+tunnel.log
+fly_relaunch_*.log

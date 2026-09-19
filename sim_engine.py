@@ -97,6 +97,16 @@ class SimEngine:
         # Live audio drive: group name -> (gpu indices, amplitude)
         self._audio = {}
 
+        # Retina looming (Oscar, 2026-09-19): R1-6 photoreceptors per eye + their eccentricity from the
+        # frontal point, the LPLC2/LC4 lobe readout, and the optic-lobe activity by side. Empty until
+        # _build_loom_and_dodge finds cell_type/side/pos in the annotations.
+        self._retina = {}          # side -> (gpu indices, gpu eccentricity 0..1)
+        self._loom_lobe = {}       # side -> gpu indices (LPLC2+LC4), for the "did it reach the lobe" metric
+        self._optic_by_side = {}   # side -> gpu indices (super_class 'optic'), same purpose
+        self._loom_state = {"left": {"t0": None, "prev": 0.0}, "right": {"t0": None, "prev": 0.0}}
+        self.LOOM_DURATION = 0.7   # seconds from onset to the ring covering the whole retina
+        self.LOOM_BAND = 0.22      # ring thickness in normalized eccentricity: the expanding EDGE, not the whole disc
+
         # Frame recording for slow-motion replay: every Nth substep (0 = off)
         self.frame_every = 0
         self.max_edges_per_frame = 400
@@ -225,8 +235,12 @@ class SimEngine:
         self._build_loom_and_dodge(data)
 
     # Looming test (Oscar, 2026-09-19): "the waveform arrives frontally, will the mouche try to dodge it?"
-    LOOM_TYPES = ("LPLC2", "LC4")     # looming-selective (expanding stimulus) cells in the optic lobe: prefer these
-                                      # over raw photoreceptors ("Light (left/right eye)") for a looming stimulus
+    # Fixed 2026-09-19: the stimulus now enters through the RETINA (R1-6) so it has to cross the optic lobe to
+    # reach LPLC2/LC4, instead of being injected straight into those cells (which left the ~77k optic-lobe
+    # neurons dark — Oscar: "je vois toujours pas les lobes sur les cotes s'activer").
+    RETINA_TYPE = "R1-6"              # photoreceptors: where a looming image actually enters the eye
+    LOOM_TYPES = ("LPLC2", "LC4")     # looming-selective (expanding stimulus) cells in the optic lobe: the readout
+                                      # that proves the retina signal reached them
     TURN_TYPES = ("DNA01", "DNA02")   # descending neurons that steer a turn
     ESCAPE_TYPE = "DNP01"             # giant fiber: the fly's fast straight-line escape
 
@@ -238,13 +252,48 @@ class SimEngine:
         ct = np.char.upper(np.asarray(data["cell_type"]).astype(str))
         side = np.asarray(data["side"]).astype(str)
 
+        # Retina: R1-6 photoreceptors per eye, each given an eccentricity 0..1 from that eye's frontal point
+        # (the medial/nasal patch of a fly's compound eye is its frontal binocular field, so "straight ahead" =
+        # the direction from the eye's centroid toward the body midline x=0). A looming disc grows outward from
+        # eccentricity 0: _loom_ring below picks the photoreceptors on its current expanding edge.
+        retina_mask = ct == self.RETINA_TYPE
+        if "pos_x" in data and "pos_y" in data:
+            pos2d = np.stack([data["pos_x"], data["pos_y"]], axis=1).astype(np.float64)
+            for name, key in (("left", "LOOM_L"), ("right", "LOOM_R")):
+                idx = np.nonzero(retina_mask & (side == name))[0]
+                if not len(idx):
+                    continue
+                p = pos2d[idx]
+                centroid = p.mean(axis=0)
+                frontal = -centroid
+                norm = np.linalg.norm(frontal)
+                frontal = frontal / norm if norm > 1e-9 else np.array([1.0, 0.0])
+                rel = p - centroid
+                cross = rel[:, 0] * frontal[1] - rel[:, 1] * frontal[0]
+                dot = rel[:, 0] * frontal[0] + rel[:, 1] * frontal[1]
+                angle = np.abs(np.arctan2(cross, dot))  # 0 = straight ahead, pi = rear of the eye
+                ecc = (angle / max(float(angle.max()), 1e-6)).astype(np.float32)
+                self._retina[name] = (cp.asarray(idx.astype(np.int64)), cp.asarray(ecc))
+                # amplitude bookkeeping only (set_audio writes here); the actual injection targets a moving
+                # ring subset of these indices, computed each step in _loom_ring
+                self._audio[key] = [cp.asarray(idx.astype(np.int64)), 0.0]
+        print(f"  retina input: { {k: len(v[0]) for k, v in self._retina.items()} } ({self.RETINA_TYPE})")
+
         loom_mask = np.isin(ct, self.LOOM_TYPES)
-        for side_name, key in (("left", "LOOM_L"), ("right", "LOOM_R")):
-            idx = np.nonzero(loom_mask & (side == side_name))[0]
+        for name in ("left", "right"):
+            idx = np.nonzero(loom_mask & (side == name))[0]
             if len(idx):
-                self._audio[key] = [cp.asarray(idx), 0.0]
-        print(f"  loom input: { {k: len(self._audio[k][0]) for k in ('LOOM_L', 'LOOM_R') if k in self._audio} }"
-              f" ({'+'.join(self.LOOM_TYPES)})")
+                self._loom_lobe[name] = cp.asarray(idx.astype(np.int64))
+        print(f"  loom lobe readout: { {k: len(v) for k, v in self._loom_lobe.items()} } ({'+'.join(self.LOOM_TYPES)})")
+
+        if "super_class" in data:
+            sc = np.char.lower(np.asarray(data["super_class"]).astype(str))
+            optic_mask = sc == "optic"
+            for name in ("left", "right"):
+                idx = np.nonzero(optic_mask & (side == name))[0]
+                if len(idx):
+                    self._optic_by_side[name] = cp.asarray(idx.astype(np.int64))
+            print(f"  optic lobe by side: { {k: len(v) for k, v in self._optic_by_side.items()} }")
 
         turn_mask = np.isin(ct, self.TURN_TYPES)
         escape_mask = ct == self.ESCAPE_TYPE
@@ -260,6 +309,29 @@ class SimEngine:
     def get_dodge_groups(self):
         """Neuron counts behind each dodge key, so a page can tell 'not found in this connectome' from 'found but quiet'."""
         return {name: int(len(self._dodge_readout.get(name, ()))) for name in ("left", "right", "escape")}
+
+    def _loom_ring(self, side, key):
+        """The photoreceptors on the current looming disc's expanding EDGE for this eye, or None if no disc is
+        in flight. A rising amplitude (a fresh peak from audio_in's bass/treble onset) (re)starts the disc at
+        eccentricity 0; it then grows on its own for LOOM_DURATION seconds, independent of the audio rate."""
+        retina = self._retina.get(side)
+        if retina is None:
+            return None
+        amp = self._audio.get(key, (None, 0.0))[1]
+        st = self._loom_state[side]
+        now = time.perf_counter()
+        if amp > 0.05 and amp > st["prev"] + 0.03:
+            st["t0"] = now
+        st["prev"] = amp
+        if st["t0"] is None:
+            return None
+        elapsed = now - st["t0"]
+        if elapsed >= self.LOOM_DURATION:
+            st["t0"] = None
+            return None
+        idx, ecc = retina
+        ring = idx[cp.abs(ecc - elapsed / self.LOOM_DURATION) <= self.LOOM_BAND / 2]
+        return (ring, amp) if len(ring) else None
 
     def set_audio(self, amps):
         """amps: {group: amplitude}, e.g. {'JO-A': 0.8}. Unknown groups ignored."""
@@ -369,7 +441,14 @@ class SimEngine:
         stim_indices = self._stimulus_indices
         stim_amp = self._stimulus_amplitude
         # audio_mute: any open /stage tab keeps feeding the shared ear; a sense test must silence it
-        audio = [] if getattr(self, 'audio_mute', False) else [(idx, amp) for idx, amp in self._audio.values() if amp > 0]
+        # LOOM_L/LOOM_R are excluded here: their amplitude only arms _loom_ring below, which injects into a
+        # moving ring subset of the retina rather than the whole group every substep.
+        audio = [] if getattr(self, 'audio_mute', False) else \
+            [(idx, amp) for name, (idx, amp) in self._audio.items() if amp > 0 and name not in ("LOOM_L", "LOOM_R")]
+        for side, key in (("left", "LOOM_L"), ("right", "LOOM_R")):
+            ring = self._loom_ring(side, key)
+            if ring is not None:
+                audio.append(ring)
         d_accum_bits = self.d_accum_bits
         d_accum_bits.fill(0)
         hist = cp.empty((n, self.spike_words), dtype=cp.uint32) if self.frame_every else None
@@ -449,6 +528,13 @@ class SimEngine:
         if self._dodge_readout:
             result["dodge"] = {name: float(fired[self._dodge_readout[name]].mean()) if name in self._dodge_readout else 0.0
                                for name in ("left", "right", "escape")}
+        # Proof the retina signal actually crosses the optic lobe (Oscar, 2026-09-19), not just arriving at the readout.
+        if self._optic_by_side:
+            result["optic_activity"] = {name: float(fired[self._optic_by_side[name]].mean()) if name in self._optic_by_side else 0.0
+                                        for name in ("left", "right")}
+        if self._loom_lobe:
+            result["loom_lobe"] = {name: float(fired[self._loom_lobe[name]].mean()) if name in self._loom_lobe else 0.0
+                                   for name in ("left", "right")}
 
         # Group rates (for heatmap) — only compute if enabled
         if self.send_group_rates:
