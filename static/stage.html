@@ -20,11 +20,13 @@
   .meter { flex: 1; height: 6px; background: #112; }
   .meter i { display: block; height: 100%; width: 0; background: #3cf; }
   .lbl { width: 42px; }
+  .lbl-wide { width: 10ch; } /* "Connexions" doesn't fit the 42px short labels; ch scales with the coarse-pointer font bump too */
   #eq { width: 100%; height: 56px; display: block; background: #060c14; }
+  #connhist { width: 100%; height: 28px; display: block; background: #060c14; }
   #m-HEAT { background: #ff7a3c; } #m-COLD { background: #9fdcff; }
   #panel #close { position: absolute; top: 6px; right: 6px; padding: 2px 9px; background: #ff2d95; border-color: #ff2d95; color: #fff; font-weight: 700; font-size: 1.15em; }
   #open { display: none; position: fixed; top: 12px; left: 12px; font: inherit; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; }
-  #annot { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #annot { position: fixed; inset: 0; pointer-events: none; } /* stays visible always: the connection pulse must survive the Repères toggle (Resolume cuts the "i" markers, not this) */
   #annotBtn.on { color: #6cf; border-color: #6cf; }
   /* touch screens have no H key: a button brings the panel back, and everything gets finger-sized */
   @media (pointer: coarse) {
@@ -47,6 +49,7 @@
   <div class="row"><span class="lbl">Réact.</span><input type="range" id="react" min="0.5" max="1" step="0.01" value="0.8"></div>
   <div id="meters"></div>
   <canvas id="eq"></canvas>
+  <div class="row"><span class="lbl lbl-wide">Connexions</span><canvas id="connhist"></canvas></div>
   <div class="row"><span class="lbl">Chaleur</span><div class="meter"><i id="m-HEAT"></i></div><input type="range" id="heat_gain" min="0" max="1.5" step="0.05" value="0.5"></div>
   <div class="row"><span class="lbl">Froid</span><div class="meter"><i id="m-COLD"></i></div><input type="range" id="cold_gain" min="0" max="1.5" step="0.05" value="0.5"></div>
   <div id="info">Connexion...</div>
@@ -81,6 +84,61 @@ let ANN = [], sensesData = null, earLevel = 0, earLevelTarget = 0, hoveredAnn = 
 const CLIMATE = { 'Temperature change': ['HEAT', '#ff7a3c'], 'Humidity change': ['COLD', '#9fdcff'] }, climate = { HEAT: 0, COLD: 0 }; // senses the sound drives all the time
 let eqSpectrum = [], ownEQ = false;
 const senseFlash = {}, tapToSense = {};
+
+// ---- Connection pulses: a spike in firing connections = a shockwave through the whole brain, not a meter ----
+// Oscar: "quand ya un evenement important ca trigue plein de connexion" -> celebrate the spike, don't smooth it.
+const CONN_BASE_ALPHA = 0.03; // how fast the calm baseline adapts (in samples) -- live tuning knob
+const CONN_SPIKE_LOG = 0.5;   // log10 jump over baseline that counts as an event (~x3)
+const CONN_FLASH_MS = 550;    // how long the shockwave trace lingers on screen
+const CONN_HIST_MS = 18000;   // panel strip window: a peak stays visible until it scrolls out
+const CONN_LOG_MIN = 3.3, CONN_LOG_MAX = 6.5; // strip's vertical range, ~2k to ~3.16M connections
+let connBaseLog = null, connFlash = null, connHist = [], connLast = 0;
+const fmtConn = v => v >= 1e6 ? (v / 1e6).toFixed(1).replace('.', ',') + ' M' : v >= 1e3 ? Math.round(v / 1e3) + ' k' : String(Math.round(v));
+function onConnections(v) {
+  if (parent !== window) parent.postMessage({ source: 'fly', type: 'connections', value: v }, '*');
+  connLast = v;
+  const now = performance.now();
+  connHist.push({ t: now, v });
+  while (connHist.length && connHist[0].t < now - CONN_HIST_MS) connHist.shift();
+  const logV = Math.log10(v + 1);
+  if (connBaseLog == null) { connBaseLog = logV; return; }
+  const delta = logV - connBaseLog;
+  if (delta > CONN_SPIKE_LOG) connFlash = { t: now, mag: Math.min(1, delta / 1.5) };
+  else connBaseLog += (logV - connBaseLog) * CONN_BASE_ALPHA;
+}
+function drawConnHist(canvas) {
+  const dpr = Math.min(devicePixelRatio, 2), w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
+  const now = performance.now();
+  const x = t => (w - 46) * (1 - (now - t) / CONN_HIST_MS); // right gutter: the figure never sits on the newest part of the curve
+  const y = v => h * (1 - Math.max(0, Math.min(1, (Math.log10(v + 1) - CONN_LOG_MIN) / (CONN_LOG_MAX - CONN_LOG_MIN))));
+  if (connHist.length > 1) {
+    c.beginPath(); c.moveTo(x(connHist[0].t), h);
+    connHist.forEach(p => c.lineTo(x(p.t), y(p.v)));
+    c.lineTo(x(connHist[connHist.length - 1].t), h); c.closePath();
+    c.fillStyle = 'rgba(160,220,255,.25)'; c.fill();
+    c.beginPath(); connHist.forEach((p, i) => i ? c.lineTo(x(p.t), y(p.v)) : c.moveTo(x(p.t), y(p.v)));
+    c.strokeStyle = '#a0dcff'; c.lineWidth = 1.5; c.stroke();
+  }
+  c.fillStyle = '#dee8ff'; c.font = 'bold 11px system-ui'; c.textAlign = 'right'; c.textBaseline = 'middle';
+  c.fillText(fmtConn(connLast), w - 4, h / 2);
+}
+function drawConnPulse() {
+  if (!connFlash) return;
+  const age = performance.now() - connFlash.t;
+  if (age > CONN_FLASH_MS) { connFlash = null; return; }
+  const p = 1 - age / CONN_FLASH_MS, cx = innerWidth / 2, cy = innerHeight / 2;
+  const r = Math.max(innerWidth, innerHeight) * (0.35 + 0.5 * (1 - p)), a = connFlash.mag * p * 0.5;
+  const g = actx2.createRadialGradient(cx, cy, 0, cx, cy, r);
+  g.addColorStop(0, `rgba(160,220,255,${a})`); g.addColorStop(1, 'rgba(160,220,255,0)');
+  actx2.globalCompositeOperation = 'lighter';
+  actx2.fillStyle = g; actx2.fillRect(0, 0, innerWidth, innerHeight);
+  actx2.globalCompositeOperation = 'source-over';
+}
 let annotOn = localStorage.flyAnnot !== '0'; // on unless switched off on this browser (I key or panel button): the Resolume capture turns it off once
 const ann = document.getElementById('annot'), actx2 = ann.getContext('2d');
 function sizeAnnot() {
@@ -90,7 +148,7 @@ function sizeAnnot() {
   actx2.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 sizeAnnot();
-function setAnnot(on) { annotOn = on; localStorage.flyAnnot = on ? '1' : '0'; ann.style.display = on ? 'block' : 'none'; document.getElementById('annotBtn').classList.toggle('on', on); }
+function setAnnot(on) { annotOn = on; localStorage.flyAnnot = on ? '1' : '0'; document.getElementById('annotBtn').classList.toggle('on', on); }
 setAnnot(annotOn);
 // Slots are fixed fractions of the screen (never move) so "i" markers never collide;
 // only the leader line's far end (the live projected neuron) moves as the brain turns.
@@ -118,6 +176,7 @@ function maybeBuildAnnots() { if (pos && sensesData && !ANN.length) buildAnnots(
 const _annV = new THREE.Vector3();
 function drawAnnots() {
   actx2.clearRect(0, 0, innerWidth, innerHeight);
+  drawConnPulse();
   if (!annotOn || !ANN.length) return;
   const now = performance.now(), cw = innerWidth, ch = innerHeight;
   for (const a of ANN) {
@@ -244,7 +303,7 @@ function drawGlow() {
 
 // a batch lands as ~40 frames at once: spread them over the next screen frames instead of one flash
 function playFrames() { for (let k = Math.ceil(frames.length / 6); k > 0 && trail; k--) trail.add(frames.shift().e); if (trail) trail.draw(TRAIL_DECAY); }
-(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); if (!document.getElementById('panel').classList.contains('hidden')) drawEQ(document.getElementById('eq'), eqSpectrum, climate.HEAT, climate.COLD); })();
+(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); if (!document.getElementById('panel').classList.contains('hidden')) { drawEQ(document.getElementById('eq'), eqSpectrum, climate.HEAT, climate.COLD); drawConnHist(document.getElementById('connhist')); } })();
 
 // ---- Sim link ----
 const info = document.getElementById('info');
@@ -268,6 +327,7 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.type === 'init') info.textContent = `${m.n_neurons.toLocaleString()} neurones · oreille : ${Object.entries(m.audio_groups || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'introuvable'}`;
     if (m.type === 'metrics' && m.active_indices) onSpikes(m.active_indices);
+    if (m.type === 'metrics' && m.connections != null) onConnections(m.connections);
     if (m.type === 'metrics' && m.fly_says) {
       document.getElementById('flysays').textContent = `mouche : ${(m.fly_says.verdict || '—').toUpperCase()}`;
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
