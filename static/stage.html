@@ -19,6 +19,8 @@
   .lbl { width: 42px; }
   #panel #close { position: absolute; top: 6px; right: 6px; padding: 2px 9px; background: #ff2d95; border-color: #ff2d95; color: #fff; font-weight: 700; font-size: 1.15em; }
   #open { display: none; position: fixed; top: 12px; left: 12px; font: inherit; background: rgba(0,0,0,.7); color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; }
+  #annot { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #annotBtn.on { color: #6cf; border-color: #6cf; }
   /* touch screens have no H key: a button brings the panel back, and everything gets finger-sized */
   @media (pointer: coarse) {
     #panel { font-size: 15px; right: 12px; gap: 12px; padding-top: 40px; }
@@ -45,9 +47,11 @@
   <div id="bgstate"></div>
   <div id="bgsec" style="color:#fff;font-weight:600"></div>
   <div id="bg"></div>
-  <div id="hkey" style="opacity:.6">H : masquer ce panneau</div>
+  <div class="row"><span class="lbl">Repères</span><button id="annotBtn">i</button></div>
+  <div id="hkey" style="opacity:.6">H : masquer ce panneau · I : repères</div>
 </div>
 <button id="open" aria-label="réglages">☰</button>
+<canvas id="annot"></canvas>
 <script>
 // Artistic mapping, not physiology: bass -> JO-B, mids -> JO-A, highs -> JO-C, loudness -> JO-E
 const BANDS = [
@@ -58,6 +62,95 @@ const BANDS = [
 ];
 const GLOW = [0.2, 0.85, 1.0];
 const DECAY = 0.88;
+
+// ---- Sense annotations ("i" markers + leader line to the triggering zone) ----
+const LBL = { manual: 'main', pattern: 'loop', drop: 'DROP', break: 'BREAK', suspension: 'SUSPENSION' };
+const EVENT_COLOR = { drop: '#3ddc84', break: '#ff9f45', suspension: '#6c9cff', pattern: '#33ccff', manual: '#33ccff' };
+const REST_COLOR = '#9ab8c4';
+const FLASH_MS = 1800;
+const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+let ANN = [], sensesData = null, earLevel = 0, earLevelTarget = 0, hoveredAnn = null;
+const senseFlash = {}, tapToSense = {};
+let annotOn = new URLSearchParams(location.search).has('embed');
+const ann = document.getElementById('annot'), actx2 = ann.getContext('2d');
+function sizeAnnot() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  ann.width = innerWidth * dpr; ann.height = innerHeight * dpr;
+  ann.style.width = innerWidth + 'px'; ann.style.height = innerHeight + 'px';
+  actx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeAnnot();
+function setAnnot(on) { annotOn = on; ann.style.display = on ? 'block' : 'none'; document.getElementById('annotBtn').classList.toggle('on', on); }
+setAnnot(annotOn);
+// Slots are fixed fractions of the screen (never move) so "i" markers never collide;
+// only the leader line's far end (the live projected neuron) moves as the brain turns.
+// Side = real hemisphere (pos x sign, already mirrored), not camera-dependent screen side.
+function buildAnnots() {
+  const left = [], right = [];
+  sensesData.forEach((s, si) => {
+    s.taps.forEach(t => { tapToSense[t.name] = si; });
+    let first = true;
+    s.taps.forEach(t => (t.anchors || []).forEach(a => {
+      if (a >= N) return;
+      const item = { si, anchor: a, label: s.label, when: s.when, primary: first, isEar: s.label === 'oreille', hoverTxt: `${s.label} · ${s.when}` };
+      first = false;
+      (pos[a * 3] < 0 ? left : right).push(item);
+    }));
+  });
+  [left, right].forEach((side, k) => {
+    side.sort((a, b) => pos[b.anchor * 3 + 1] - pos[a.anchor * 3 + 1]); // top to bottom, anatomical order
+    const n = side.length;
+    side.forEach((item, i) => { item.fx = k === 0 ? 0.035 : 0.965; item.fy = n <= 1 ? 0.5 : 0.1 + 0.8 * i / (n - 1); });
+  });
+  ANN = left.concat(right);
+}
+function maybeBuildAnnots() { if (pos && sensesData && !ANN.length) buildAnnots(); }
+const _annV = new THREE.Vector3();
+function drawAnnots() {
+  actx2.clearRect(0, 0, innerWidth, innerHeight);
+  if (!annotOn || !ANN.length) return;
+  const now = performance.now(), cw = innerWidth, ch = innerHeight;
+  for (const a of ANN) {
+    _annV.set(pos[a.anchor * 3], pos[a.anchor * 3 + 1], pos[a.anchor * 3 + 2]).project(camera);
+    if (_annV.z > 1) continue;
+    const nx = (_annV.x * 0.5 + 0.5) * cw, ny = (-_annV.y * 0.5 + 0.5) * ch;
+    const sx = a.fx * cw, sy = a.fy * ch;
+    let color = REST_COLOR, dotA = 0.35, lineA = 0.15, txt = null, txtA = 1;
+    if (a.isEar) {
+      dotA = 0.3 + 0.55 * earLevel; lineA = 0.12 + 0.45 * earLevel;
+    } else {
+      const fl = senseFlash[a.si], age = fl ? now - fl.t : Infinity;
+      if (age < FLASH_MS) {
+        const p = 1 - age / FLASH_MS;
+        color = EVENT_COLOR[fl.event] || REST_COLOR; dotA = 0.35 + 0.6 * p; lineA = 0.15 + 0.55 * p;
+        if (a.primary) { txt = fl.txt; txtA = p; }
+      }
+    }
+    if (a === hoveredAnn || (a.tapUntil && now < a.tapUntil)) {
+      dotA = 1; lineA = 0.85; if (!txt) { txt = a.hoverTxt; txtA = 1; }
+    }
+    if (!txt && a.primary) { txt = a.label; txtA = 0.45; } // at rest each zone keeps its name, dim: the reason only shows when it fires
+    actx2.strokeStyle = hexA(color, lineA); actx2.lineWidth = 1;
+    actx2.beginPath(); actx2.moveTo(sx, sy); actx2.lineTo(nx, ny); actx2.stroke();
+    actx2.beginPath(); actx2.arc(sx, sy, 6, 0, 7); actx2.fillStyle = hexA(color, dotA); actx2.fill();
+    actx2.fillStyle = 'rgba(4,16,28,.9)'; actx2.font = 'bold 8px system-ui'; actx2.textAlign = 'center'; actx2.textBaseline = 'middle';
+    actx2.fillText('i', sx, sy + 0.5);
+    if (txt) {
+      actx2.font = '12px system-ui'; actx2.textBaseline = 'middle';
+      actx2.textAlign = a.fx < 0.5 ? 'left' : 'right';
+      const tx = a.fx < 0.5 ? sx + 10 : sx - 10;
+      actx2.lineWidth = 3; actx2.strokeStyle = `rgba(0,0,0,${0.7 * txtA})`; actx2.strokeText(txt, tx, sy);
+      actx2.fillStyle = `rgba(222,238,255,${txtA})`; actx2.fillText(txt, tx, sy);
+    }
+  }
+}
+function hitTestAnnot(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mx = clientX - rect.left, my = clientY - rect.top;
+  let best = null, bd = 144; // 12px radius, squared
+  for (const a of ANN) { const dx = mx - a.fx * rect.width, dy = my - a.fy * rect.height, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = a; } }
+  return best;
+}
 
 // ---- 3D ----
 const scene = new THREE.Scene();
@@ -77,6 +170,7 @@ controls.autoRotateSpeed = 0.4;
 addEventListener('resize', () => {
   frame();
   renderer.setSize(innerWidth, innerHeight);
+  sizeAnnot();
 });
 
 let N = 0, pos = null, glow = null, intensity = null, live = [];
@@ -110,6 +204,7 @@ fetch('/api/positions').then(r => r.json()).then(data => {
   glow = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.02, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
   scene.add(glow);
   trail = makeEdgeTrail(scene, pos);
+  maybeBuildAnnots();
 });
 
 function onSpikes(indices) {
@@ -138,7 +233,7 @@ function drawGlow() {
 
 // a batch lands as ~40 frames at once: spread them over the next screen frames instead of one flash
 function playFrames() { for (let k = Math.ceil(frames.length / 6); k > 0 && trail; k--) trail.add(frames.shift().e); if (trail) trail.draw(TRAIL_DECAY); }
-(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); })();
+(function loop() { requestAnimationFrame(loop); drawGlow(); playFrames(); controls.update(); renderer.render(scene, camera); earLevel += (earLevelTarget - earLevel) * 0.15; drawAnnots(); })();
 
 // ---- Sim link ----
 const info = document.getElementById('info');
@@ -165,7 +260,7 @@ function connect() {
       if (parent !== window) parent.postMessage({ source: 'fly', ...m.fly_says }, '*'); // the beatgrid dashboard embeds this page
     }
     if (m.type === 'metrics' && m.frames) { frames.push(...m.frames); if (frames.length > 240) frames.splice(0, frames.length - 240); }
-    if (m.type === 'audio_levels') for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; }
+    if (m.type === 'audio_levels') { for (const [g, v] of Object.entries(m.levels)) { const el = document.getElementById('m-' + g); if (el) el.style.width = (v * 100) + '%'; } earLevelTarget = m.levels['JO-E'] ?? 0; }
     if (m.type === 'beatgrid_state') {
       const st = m.state, el = document.getElementById('bgstate');
       el.textContent = st.bpm == null ? 'beatgrid : dashboard fermé' : `beatgrid : ${st.bpm} BPM · ${(st.advice || '—').toUpperCase()} · mesure ${st.bar ?? '—'}.${st.beat ?? '—'}`;
@@ -173,7 +268,8 @@ function connect() {
     if (m.type === 'beatgrid') {
       if (parent !== window) parent.postMessage({ source: 'fly', type: 'tap', sense: m.sense, event: m.event }, '*');
       const FR = { 'Temperature change': 'chaleur', 'Humidity change': 'humidité', 'Light (left eye)': 'œil gauche', 'Light (right eye)': 'œil droit', 'Sugar (proboscis)': 'sucre', 'Odor (both antennae)': 'odeur', 'Touch (left leg/body)': 'toucher gauche', 'Touch (right leg/body)': 'toucher droit', 'Tickle (left antenna)': 'vent antenne gauche', 'Tickle (right antenna)': 'vent antenne droite' };
-      const LBL = { manual: 'main', pattern: 'loop', drop: 'DROP', break: 'BREAK', suspension: 'SUSPENSION' };
+      const si = tapToSense[m.sense];
+      if (si != null && sensesData) senseFlash[si] = { t: performance.now(), event: m.event, txt: `${LBL[m.event] || m.event} · ${sensesData[si].label}` };
       // drops and breaks get their own line: loop changes are frequent and would push them out of the log
       if (m.event !== 'pattern') document.getElementById('bgsec').textContent = `${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense} · ${new Date().toLocaleTimeString()}`;
       bgLog.unshift(`${LBL[m.event] || m.event} → ${FR[m.sense] || m.sense}`); bgLog.length = Math.min(bgLog.length, 5);
@@ -257,8 +353,10 @@ setInterval(() => {
 document.getElementById('gain').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'audio_gain', value: +e.target.value })); // server-side listening (--audio)
 document.getElementById('react').oninput = e => ws.send(JSON.stringify({ cmd: 'set_param', key: 'weight_gain', value: +e.target.value }));
 
-// The dashboard shows the sense table and fires a sense by hand: it cannot fetch :8010 itself (other origin)
-const postSenses = () => fetch('/api/senses').then(r => r.json()).then(senses => parent.postMessage({ source: 'fly', type: 'senses', senses }, '*'));
+// The dashboard shows the sense table and fires a sense by hand: it cannot fetch :8010 itself (other origin).
+// Same fetch also seeds the brain "i" annotations below - one request, two consumers.
+const sensesReady = fetch('/api/senses').then(r => r.json()).then(senses => { sensesData = senses; maybeBuildAnnots(); return senses; });
+const postSenses = () => sensesReady.then(senses => parent.postMessage({ source: 'fly', type: 'senses', senses }, '*'));
 if (parent !== window) postSenses();
 addEventListener('message', e => {
   if (!e.data || e.data.source !== 'dashboard') return;
@@ -270,7 +368,11 @@ document.getElementById('adapt').oninput = e => ws.send(JSON.stringify({ cmd: 's
 // ?embed : the brain alone, as a panel inside the beatgrid dashboard (which has its own readouts)
 if (new URLSearchParams(location.search).has('embed')) { document.getElementById('panel').classList.add('hidden'); document.getElementById('open').remove(); }
 for (const id of ['close', 'open']) if (document.getElementById(id)) document.getElementById(id).onclick = () => document.getElementById('panel').classList.toggle('hidden');
-addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); });
+addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden'); if (e.key === 'i' || e.key === 'I') setAnnot(!annotOn); });
+document.getElementById('annotBtn').onclick = () => setAnnot(!annotOn);
+renderer.domElement.addEventListener('mousemove', e => { hoveredAnn = hitTestAnnot(e.clientX, e.clientY); });
+renderer.domElement.addEventListener('mouseleave', () => { hoveredAnn = null; });
+renderer.domElement.addEventListener('touchstart', e => { const t = e.touches[0]; if (!t) return; const hit = hitTestAnnot(t.clientX, t.clientY); if (hit) hit.tapUntil = performance.now() + 3000; }, { passive: true });
 </script>
 </body>
 </html>
