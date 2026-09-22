@@ -233,7 +233,7 @@ function drawConnPulse() {
   actx2.fillStyle = g; actx2.fillRect(0, 0, innerWidth, innerHeight);
   actx2.globalCompositeOperation = 'source-over';
 }
-let annotOn = localStorage.flyAnnot !== '0'; // on unless switched off on this browser (I key or panel button): the Resolume capture turns it off once
+let annotOn = !location.search.includes('clean') && localStorage.flyAnnot !== '0'; // on unless switched off on this browser (I key or panel button), or ?clean=1: the Spout/Resolume capture asks for the bare brain
 const ann = document.getElementById('annot'), actx2 = ann.getContext('2d');
 function sizeAnnot() {
   const dpr = Math.min(devicePixelRatio, 2);
